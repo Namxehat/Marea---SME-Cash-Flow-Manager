@@ -1,0 +1,24 @@
+date,description,category,type,amount,status,expected_delay_days
+2026-10-25,Opening Bank Balance,Cash Reserve,inflow,18500.00,actual,0
+2026-10-28,Client A - Workshop Batch,Client Invoice,inflow,6400.00,actual,5
+2026-11-01,Commercial Lease,Rent,outflow,-2400.00,actual,0
+2026-11-03,Staff Payroll,Payroll,outflow,-7800.00,actual,0
+2026-11-07,Raw Materials Order,Supplier,outflow,-3200.00,actual,0
+2026-11-12,Client B - Catering & Events,Client Invoice,inflow,5100.00,actual,8
+2026-11-15,Monthly VAT Settlement,Taxes,outflow,-1950.00,actual,0
+2026-11-18,Packaging & Supplies,Supplier,outflow,-1450.00,actual,0
+2026-12-01,Commercial Lease,Rent,outflow,-2400.00,planned,0
+2026-12-03,Staff Payroll,Payroll,outflow,-7800.00,planned,0
+2026-12-06,Client C - Retainer Invoice,Client Invoice,inflow,4800.00,planned,12
+2026-12-10,Major Supplier Restock,Supplier,outflow,-6500.00,planned,0
+2026-12-15,Monthly VAT Settlement,Taxes,outflow,-2200.00,planned,0
+2026-12-20,Client A - Follow-up Invoice,Client Invoice,inflow,5900.00,planned,10
+2027-01-02,Commercial Lease,Rent,outflow,-2400.00,planned,0
+2027-01-04,Staff Payroll,Payroll,outflow,-7800.00,planned,0
+2027-01-12,Client B - Holiday Order,Client Invoice,inflow,7200.00,planned,7
+2027-01-15,Monthly VAT Settlement,Taxes,outflow,-2100.00,planned,0
+2027-01-22,Equipment & Maintenance,Supplier,outflow,-2600.00,planned,0
+2027-02-01,Commercial Lease,Rent,outflow,-2400.00,planned,0
+2027-02-03,Staff Payroll,Payroll,outflow,-7800.00,planned,0
+2027-02-10,Client C - Q1 Invoice,Client Invoice,inflow,6300.00,planned,9
+2027-02-15,Monthly VAT Settlement,Taxes,outflow,-2050.00,planned,0
