@@ -1,0 +1,7 @@
+marea-cashflow/
+├── app.py                  # Main Streamlit app (Home, Forecast, Alerts, Transactions)
+├── finance_engine.py       # Cash flow projection, scenario adjustments & shortage alerts
+├── data/
+│   └── sample_sme_data.csv # Starter SME dataset (replace/expand with Member 4's data)
+├── requirements.txt        # Python dependencies
+└── README.md               # How to run the app & repo notes
