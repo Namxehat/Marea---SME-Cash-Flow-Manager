@@ -1,12 +1,23 @@
 import hashlib
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Dict, List, Tuple
 import pandas as pd
 
 GENESIS_HASH = "GENESIS_00000000000000000000000000000000"
 
-FRENCH_HOLIDAYS_2026_2027 = {
+FRENCH_HOLIDAYS_2025_2027 = {
+    date(2025, 1, 1),
+    date(2025, 4, 21),
+    date(2025, 5, 1),
+    date(2025, 5, 8),
+    date(2025, 5, 29),
+    date(2025, 6, 9),
+    date(2025, 7, 14),
+    date(2025, 8, 15),
+    date(2025, 11, 1),
+    date(2025, 11, 11),
+    date(2025, 12, 25),
     date(2026, 1, 1),
     date(2026, 4, 6),
     date(2026, 5, 1),
@@ -97,35 +108,17 @@ def verify_ledger_integrity(df: pd.DataFrame) -> Dict:
 
 def _seed_default_ledger() -> pd.DataFrame:
     rows = [
-        ("TX-0001", "2026-09-01", "2026-09-01", "Rania", "financing", "Owner Equity Injection", "Initial Reserve", 14500.00, "bank", 0, "settled", "Opening store treasury reserve"),
-        ("TX-0002", "2026-09-02", "2026-09-02", "Nam", "revenue", "Daily POS Sales", "General Grocery & Snacks", 1420.00, "card", 0, "settled", "Daily checkout sales"),
-        ("TX-0003", "2026-09-03", "2026-09-13", "Noelle", "expense", "Supplier Inventory", "Fresh Produce & Dairy", -980.00, "bank", 10, "settled", "Normandy fresh dairy restock"),
-        ("TX-0004", "2026-09-05", "2026-09-05", "Nam", "revenue", "Daily POS Sales", "Beverages & Coffee", 1580.00, "card", 0, "settled", "Weekend foot traffic boost"),
-        ("TX-0005", "2026-09-08", "2026-09-08", "Noelle", "expense", "Rent & Utilities", "Storefront Lease & Power", -1450.00, "bank", 0, "settled", "Monthly storefront lease"),
-        ("TX-0006", "2026-09-10", "2026-09-10", "Noelle", "expense", "Payroll", "Staff Salaries & Charges", -2450.00, "bank", 0, "settled", "September staff payroll"),
-        ("TX-0007", "2026-09-12", "2026-09-12", "Nam", "revenue", "Daily POS Sales", "General Grocery & Snacks", 1490.00, "cash", 0, "settled", "Mid-month grocery sales"),
-        ("TX-0008", "2026-09-15", "2026-09-25", "Noelle", "expense", "Supplier Inventory", "Dry Goods & Packaged", -1050.00, "bank", 10, "settled", "Dry pantry & beverage restock"),
-        ("TX-0009", "2026-09-19", "2026-09-19", "Nam", "revenue", "Daily POS Sales", "Bakery & Ready-to-Eat", 1640.00, "card", 0, "settled", "Saturday rush sales"),
-        ("TX-0010", "2026-09-24", "2026-09-24", "Nam", "revenue", "Daily POS Sales", "General Grocery & Snacks", 1390.00, "card", 0, "settled", "Weekday neighborhood sales"),
-        ("TX-0011", "2026-09-28", "2026-10-08", "Noelle", "expense", "Supplier Inventory", "Fresh Produce & Dairy", -940.00, "bank", 10, "settled", "End-of-month produce delivery"),
-        ("TX-0012", "2026-10-02", "2026-10-02", "Nam", "revenue", "Daily POS Sales", "General Grocery & Snacks", 1510.00, "card", 0, "settled", "Early October POS batch"),
-        ("TX-0013", "2026-10-06", "2026-10-06", "Noelle", "expense", "Rent & Utilities", "Storefront Lease & Power", -1450.00, "bank", 0, "settled", "October storefront lease"),
-        ("TX-0014", "2026-10-10", "2026-10-10", "Noelle", "expense", "Payroll", "Staff Salaries & Charges", -2480.00, "bank", 0, "settled", "October staff payroll"),
-        ("TX-0015", "2026-10-14", "2026-10-14", "Nam", "revenue", "Daily POS Sales", "Beverages & Coffee", 1620.00, "card", 0, "settled", "Autumn beverage & snack sales"),
-        ("TX-0016", "2026-10-18", "2026-10-28", "Noelle", "expense", "Supplier Inventory", "Dry Goods & Packaged", -1120.00, "bank", 10, "settled", "Supplier invoice #412"),
-        ("TX-0017", "2026-10-23", "2026-10-23", "Nam", "revenue", "Daily POS Sales", "Bakery & Ready-to-Eat", 1550.00, "cash", 0, "settled", "Weekend bakery & deli sales"),
-        ("TX-0018", "2026-10-29", "2026-11-08", "Noelle", "expense", "Supplier Inventory", "Fresh Produce & Dairy", -990.00, "bank", 10, "settled", "Supplier invoice #419"),
-        ("TX-0019", "2026-11-03", "2026-11-03", "Nam", "revenue", "Daily POS Sales", "General Grocery & Snacks", 1480.00, "card", 0, "settled", "Early November POS batch"),
-        ("TX-0020", "2026-11-06", "2026-11-06", "Noelle", "expense", "Rent & Utilities", "Storefront Lease & Power", -1480.00, "bank", 0, "settled", "November lease & heating"),
-        ("TX-0021", "2026-11-10", "2026-11-10", "Noelle", "expense", "Payroll", "Staff Salaries & Charges", -2500.00, "bank", 0, "settled", "November staff payroll"),
-        ("TX-0022", "2026-11-14", "2026-11-14", "Nam", "revenue", "Daily POS Sales", "Beverages & Coffee", 1590.00, "card", 0, "settled", "Mid-November weekend sales"),
-        ("TX-0023", "2026-11-18", "2026-11-28", "Noelle", "expense", "Supplier Inventory", "Dry Goods & Packaged", -1180.00, "bank", 10, "scheduled", "Pending supplier settlement"),
-        ("TX-0024", "2026-11-22", "2026-11-22", "Nam", "revenue", "Daily POS Sales", "General Grocery & Snacks", 1530.00, "card", 0, "settled", "Recent weekend register total"),
+        ("TX-0001", "2025-01-02", "2025-01-02", "Rania", "financing", "Owner Equity Injection", "Initial Reserve", 12500.00, "bank", 0, "settled", "Initial Normandy store treasury capital"),
+        ("TX-0002", "2025-01-02", "2025-01-02", "Nam", "revenue", "Daily POS Sales", "General Grocery & Snacks", 345.00, "card", 0, "settled", "Daily POS register settlement"),
+        ("TX-0003", "2025-01-05", "2025-01-05", "Noelle", "expense", "Rent & Utilities", "Storefront Lease & Power", -1420.00, "bank", 0, "settled", "Monthly lease & utilities (Jan 2025)"),
+        ("TX-0004", "2025-01-10", "2025-01-10", "Noelle", "expense", "Payroll", "Staff Salaries & Charges", -2380.00, "bank", 0, "settled", "Monthly payroll (Jan 2025)"),
+        ("TX-0005", "2026-11-10", "2026-11-10", "Noelle", "expense", "Payroll", "Staff Salaries & Charges", -2450.00, "bank", 0, "settled", "Monthly payroll (Nov 2026)"),
+        ("TX-0006", "2026-11-22", "2026-11-22", "Nam", "revenue", "Daily POS Sales", "General Grocery & Snacks", 410.00, "card", 0, "settled", "Weekend POS register settlement"),
     ]
     cols = [
         "tx_id", "date", "settled_date", "role", "tx_type", "category",
         "inventory_scope", "amount_eur", "payment_channel", "payment_terms_days",
-        "status", "notes"
+        "status", "notes",
     ]
     df = pd.DataFrame(rows, columns=cols)
     return rebuild_hash_chain(df)
@@ -146,13 +139,17 @@ def load_store_ledger(csv_path: str) -> pd.DataFrame:
 def adjust_french_business_day(target_date: date) -> Tuple[date, str]:
     adjusted = target_date
     reasons = []
-    while adjusted.weekday() >= 5 or adjusted in FRENCH_HOLIDAYS_2026_2027:
+    while adjusted.weekday() >= 5 or adjusted in FRENCH_HOLIDAYS_2025_2027:
         if adjusted.weekday() >= 5:
             reasons.append("weekend")
-        if adjusted in FRENCH_HOLIDAYS_2026_2027:
+        if adjusted in FRENCH_HOLIDAYS_2025_2027:
             reasons.append("French public holiday")
         adjusted += timedelta(days=1)
-    note = f"Shifted to {adjusted.isoformat()} ({', '.join(sorted(set(reasons)))})" if reasons else "Standard business day"
+    note = (
+        f"Shifted to {adjusted.isoformat()} ({', '.join(sorted(set(reasons)))})"
+        if reasons
+        else "Standard business day"
+    )
     return adjusted, note
 
 
@@ -198,7 +195,7 @@ def compute_financial_kpis(df: pd.DataFrame) -> Dict:
     net_operating = rev_total - exp_total
     pending_payables = abs(scheduled[scheduled["amount_eur"] < 0]["amount_eur"].sum())
 
-    monthly_burn = max(exp_total / 3.0, 1200.0)
+    monthly_burn = max(exp_total / 23.0, 1200.0)
     runway_months = total_liquidity / monthly_burn
 
     return {
@@ -220,6 +217,7 @@ def generate_90day_forecast(
     rec_waste: bool,
     events: List[Dict],
     start_date: date = date(2026, 11, 25),
+    horizon_days: int = 90,
 ) -> pd.DataFrame:
     kpis = compute_financial_kpis(df)
     opening_cash = kpis["total_liquidity"]
@@ -230,17 +228,16 @@ def generate_90day_forecast(
         "Conservative": 0.93,
     }.get(scenario, 1.00)
 
-    # Daily baseline: slightly negative net drift (~ -12 EUR/day = -1,080 EUR over 90 days)
-    base_daily_rev = 335.0 * scenario_mult
-    base_daily_cogs = 205.0
-    fixed_daily_overhead = 142.0  # Rent, payroll, utilities averaged daily -> net -12 EUR/day before changes
+    # Calibrated so the first 30 days start slightly negative (-360 EUR) and turn positive (+2,985 EUR)
+    base_daily_rev = 342.0 * scenario_mult
+    base_daily_cogs = 210.0
+    fixed_daily_overhead = 144.0  # -12 EUR/day baseline drift => -360 EUR over 30 days
 
-    # Recommendation uplifts (shifts 90-day cashflow from slightly negative to solidly positive)
-    daily_rev_boost = 28.0 if rec_waste else 0.0           # +2,520 EUR over 90 days via bundle/margin optimization
-    daily_cogs_saving = 24.0 if rec_dpo else 0.0           # +2,160 EUR working capital release from DPO extension
-    payroll_timing_relief = 12.0 if rec_payroll else 0.0   # +1,080 EUR smoothed cash buffer
-    credit_injection = 1500.0 if rec_credit else 0.0       # +1,500 EUR immediate liquidity facility
-    credit_daily_fee = 2.5 if rec_credit else 0.0          # ~6.0% APR equivalent cost
+    daily_rev_boost = 28.0 if rec_waste else 0.0           # +840 EUR over 30 days
+    daily_cogs_saving = 24.0 if rec_dpo else 0.0           # +720 EUR over 30 days
+    payroll_timing_relief = 12.0 if rec_payroll else 0.0   # +360 EUR over 30 days
+    credit_injection = 1500.0 if rec_credit else 0.0       # +1,500 EUR short-term liquidity buffer
+    credit_daily_fee = 2.5 if rec_credit else 0.0          # -75 EUR over 30 days
 
     records = []
     cum_cash_before = opening_cash
@@ -249,7 +246,7 @@ def generate_90day_forecast(
     cum_cash_after = opening_cash + credit_injection
     cum_profit_after = 0.0
 
-    for day_idx in range(90):
+    for day_idx in range(horizon_days):
         curr_date = start_date + timedelta(days=day_idx)
         weekend_factor = 1.18 if curr_date.weekday() in (4, 5) else 0.94
 
@@ -263,7 +260,6 @@ def generate_90day_forecast(
         )
         net_a = rev_a - exp_a
 
-        # Apply user non-recurring events to "After" trajectory
         event_cash_delta = 0.0
         event_profit_delta = 0.0
         for ev in events:
