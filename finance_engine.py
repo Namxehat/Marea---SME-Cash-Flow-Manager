@@ -1,224 +1,451 @@
-from datetime import timedelta
+from __future__ import annotations
+
+from datetime import date, timedelta
+import hashlib
+import json
 import numpy as np
 import pandas as pd
 
-REQUIRED_COLUMNS = [
-    "date",
-    "description",
-    "category",
-    "type",
-    "amount",
-    "status",
-    "expected_delay_days",
-]
+TODAY = pd.Timestamp("2026-11-25").normalize()
 
-SCENARIO_CONFIG = {
+INVENTORY_CATALOG = {
+    "Beverages & Snacks": 4.60,
+    "Bananas & Produce": 1.50,
+    "Dairy & Bakery": 3.90,
+    "Household & Pantry": 4.50,
+}
+
+INVENTORY_OPTIONS_WITH_ALL = ["All Inventories"] + list(INVENTORY_CATALOG.keys())
+
+STORE_RULES = {
+    "employees_count": 5,
+    "max_bank_overdraft": 5000.0,
+    "max_short_term_borrowing": 10000.0,
+    "max_supplier_payment_days": 90,
+    "default_dpo_days": 10,
+    "recommended_dpo_days": 20,
+    "normal_payroll_day": 10,
+    "latest_payroll_day": 15,
+}
+
+# French public holidays (fixed & common dates for 2025-2027 payroll shift helper)
+FRENCH_HOLIDAYS = {
+    date(2025, 1, 1), date(2025, 4, 21), date(2025, 5, 1), date(2025, 5, 8),
+    date(2025, 5, 29), date(2025, 6, 9), date(2025, 7, 14), date(2025, 8, 15),
+    date(2025, 11, 1), date(2025, 11, 11), date(2025, 12, 25),
+    date(2026, 1, 1), date(2026, 4, 6), date(2026, 5, 1), date(2026, 5, 8),
+    date(2026, 5, 14), date(2026, 5, 25), date(2026, 7, 14), date(2026, 8, 15),
+    date(2026, 11, 1), date(2026, 11, 11), date(2026, 12, 25),
+    date(2027, 1, 1), date(2027, 3, 29), date(2027, 5, 1), date(2027, 5, 6),
+    date(2027, 5, 8), date(2027, 5, 17), date(2027, 7, 14), date(2027, 8, 15),
+    date(2027, 11, 1), date(2027, 11, 11), date(2027, 12, 25),
+}
+
+REVENUE_SCENARIOS = {
     "Cautious": {
-        "inflow_multiplier": 0.85,
-        "outflow_multiplier": 1.10,
-        "extra_delay_days": 7,
-        "description": "Lower collections (-15%), extra payment delays (+7 days), and higher costs (+10%).",
+        "revenue_multiplier": 0.85,
+        "description": "Conservative revenue (-15%) accounting for slower foot traffic or protests.",
     },
     "Realistic": {
-        "inflow_multiplier": 1.00,
-        "outflow_multiplier": 1.00,
-        "extra_delay_days": 0,
-        "description": "Baseline projection using expected amounts and typical client payment delays.",
+        "revenue_multiplier": 1.00,
+        "description": "Baseline revenue (100%) reflecting seasonal patterns and store history.",
     },
     "Optimistic": {
-        "inflow_multiplier": 1.10,
-        "outflow_multiplier": 0.95,
-        "extra_delay_days": -3,
-        "description": "Faster collections (-3 days delay), stronger inflows (+10%), and slightly lower costs (-5%).",
+        "revenue_multiplier": 1.15,
+        "description": "Stronger revenue (+15%) driven by holiday demand and full stock availability.",
     },
 }
 
+REQUIRED_COLUMNS = [
+    "tx_id",
+    "date",
+    "description",
+    "category",
+    "tx_type",
+    "inventory_type",
+    "quantity",
+    "unit_price",
+    "amount",
+    "payment_method",
+    "status",
+    "payment_term_days",
+    "expected_delay_days",
+    "entry_hash",
+]
 
-def load_transactions(csv_path: str) -> pd.DataFrame:
+
+def adjust_payroll_date(target_date: pd.Timestamp, latest_day: int = 15) -> pd.Timestamp:
+    """Shifts payroll off weekends and French national holidays, capped at latest_day of month."""
+    d = target_date.date()
+    max_cap = min(latest_day, 28)
+    while d.weekday() >= 5 or d in FRENCH_HOLIDAYS:
+        if d.day >= max_cap:
+            break
+        d += timedelta(days=1)
+    return pd.Timestamp(d).normalize()
+
+
+def _canonical_row_payload(row: pd.Series, prev_hash: str) -> str:
+    payload = {
+        "prev_hash": prev_hash,
+        "tx_id": str(row.get("tx_id", "")),
+        "date": str(pd.to_datetime(row["date"]).date()),
+        "description": str(row.get("description", "")),
+        "category": str(row.get("category", "")),
+        "tx_type": str(row.get("tx_type", "")),
+        "inventory_type": str(row.get("inventory_type", "")),
+        "quantity": round(float(row.get("quantity", 0.0)), 2),
+        "unit_price": round(float(row.get("unit_price", 0.0)), 2),
+        "amount": round(float(row.get("amount", 0.0)), 2),
+        "payment_method": str(row.get("payment_method", "")),
+        "status": str(row.get("status", "")),
+        "payment_term_days": int(row.get("payment_term_days", 0)),
+        "expected_delay_days": int(row.get("expected_delay_days", 0)),
+    }
+    return json.dumps(payload, sort_keys=True)
+
+
+def compute_hash_chain(df: pd.DataFrame) -> pd.DataFrame:
+    """Computes a sequential SHA-256 hash chain across all rows in order."""
+    out = df.copy().reset_index(drop=True)
+    prev_hash = "GENESIS"
+    computed_hashes = []
+    for _, row in out.iterrows():
+        digest = hashlib.sha256(
+            _canonical_row_payload(row, prev_hash).encode("utf-8")
+        ).hexdigest()[:16]
+        computed_hashes.append(digest)
+        prev_hash = digest
+    out["computed_hash"] = computed_hashes
+    return out
+
+
+def audit_ledger_integrity(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
+    """Flags duplicate transactions and hash-chain tampering."""
+    if df.empty:
+        return df.copy(), {"tampered_count": 0, "duplicate_count": 0, "is_clean": True}
+
+    chained = compute_hash_chain(df)
+    dup_mask = chained.duplicated(
+        subset=["date", "description", "category", "tx_type", "amount", "status"],
+        keep="first",
+    )
+
+    tampered_flags = []
+    for _, row in chained.iterrows():
+        stored = str(row.get("entry_hash", "")).strip()
+        # Blank entry_hash on initial starter seed is initialized on save; non-matching non-blank hash = tampered
+        is_tampered = bool(stored) and (stored != row["computed_hash"])
+        tampered_flags.append(is_tampered)
+
+    chained["is_duplicate"] = dup_mask
+    chained["is_tampered"] = tampered_flags
+    chained["audit_status"] = np.where(
+        chained["is_tampered"],
+        "TAMPERED",
+        np.where(chained["is_duplicate"], "DUPLICATE", "OK"),
+    )
+
+    tampered_count = int(chained["is_tampered"].sum())
+    duplicate_count = int(chained["is_duplicate"].sum())
+    return chained, {
+        "tampered_count": tampered_count,
+        "duplicate_count": duplicate_count,
+        "is_clean": (tampered_count == 0 and duplicate_count == 0),
+    }
+
+
+def seal_ledger_hashes(df: pd.DataFrame) -> pd.DataFrame:
+    """Writes valid SHA-256 chain hashes into entry_hash so saved CSV rows have verified hashes."""
+    chained = compute_hash_chain(df)
+    chained["entry_hash"] = chained["computed_hash"]
+    return chained[REQUIRED_COLUMNS]
+
+
+def load_store_ledger(csv_path: str) -> pd.DataFrame:
     df = pd.read_csv(csv_path)
-    missing = [col for col in REQUIRED_COLUMNS if col not in df.columns]
-    if missing:
-        raise ValueError(f"Missing required columns in dataset: {missing}")
+    for col in REQUIRED_COLUMNS:
+        if col not in df.columns:
+            df[col] = "" if col in {"tx_id", "entry_hash", "inventory_type"} else 0
 
-    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
+    df = df.dropna(subset=["date"]).copy()
+    df["tx_id"] = df["tx_id"].astype(str)
+    df["description"] = df["description"].fillna("Store Entry").astype(str)
+    df["category"] = df["category"].fillna("General").astype(str)
+    df["tx_type"] = df["tx_type"].fillna("expense").astype(str).str.lower()
+    df["inventory_type"] = df["inventory_type"].fillna("None").astype(str)
+    df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0.0)
+    df["unit_price"] = pd.to_numeric(df["unit_price"], errors="coerce").fillna(0.0)
     df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
+    df["payment_method"] = df["payment_method"].fillna("bank").astype(str).str.lower()
+    df["status"] = df["status"].fillna("actual").astype(str).str.lower()
+    df["payment_term_days"] = (
+        pd.to_numeric(df["payment_term_days"], errors="coerce").fillna(0).astype(int)
+    )
     df["expected_delay_days"] = (
         pd.to_numeric(df["expected_delay_days"], errors="coerce").fillna(0).astype(int)
     )
-    df["category"] = df["category"].fillna("General").astype(str)
-    df["type"] = df["type"].fillna("outflow").astype(str).str.lower()
-    df["status"] = df["status"].fillna("planned").astype(str).str.lower()
-    df["description"] = df["description"].fillna("Transaction").astype(str)
-    return df.sort_values("date").reset_index(drop=True)
+    df["entry_hash"] = df["entry_hash"].fillna("").astype(str)
+
+    # Seal hashes cleanly on load if starter hashes were left blank
+    if (df["entry_hash"].str.strip() == "").all():
+        df = seal_ledger_hashes(df)
+
+    return df.reset_index(drop=True)
 
 
-def build_cashflow_projection(
-    transactions_df: pd.DataFrame,
-    horizon_days: int = 90,
+def save_store_ledger(df: pd.DataFrame, csv_path: str) -> pd.DataFrame:
+    sealed = seal_ledger_hashes(df)
+    sealed_to_save = sealed.copy()
+    sealed_to_save["date"] = sealed_to_save["date"].dt.strftime("%Y-%m-%d")
+    sealed_to_save.to_csv(csv_path, index=False)
+    return sealed
+
+
+def recommend_cashflow_threshold(df: pd.DataFrame) -> dict:
+    """Recommends an alert threshold from historical monthly net cashflow variability."""
+    actuals = df[df["status"] == "actual"].copy()
+    if actuals.empty:
+        return {"recommended_threshold": 2000.0, "median_monthly_net": 0.0, "std_monthly_net": 0.0}
+
+    actuals["month"] = actuals["date"].dt.to_period("M")
+    monthly_net = actuals.groupby("month")["amount"].sum()
+    median_net = float(monthly_net.median()) if not monthly_net.empty else 0.0
+    std_net = float(monthly_net.std()) if len(monthly_net) > 1 else 1000.0
+    # Conservative buffer: ~40% of monthly volatility, clamped between EUR 1,500 and EUR 6,000
+    rec = float(np.clip(abs(std_net) * 0.4, 1500.0, 6000.0))
+    return {
+        "recommended_threshold": round(rec, 2),
+        "median_monthly_net": round(median_net, 2),
+        "std_monthly_net": round(std_net, 2),
+    }
+
+
+def compute_financial_kpis(df: pd.DataFrame) -> dict:
+    """Computes P&L, total cash + cash in bank, and current overdraft + borrowings."""
+    actuals = df[df["status"] == "actual"].copy()
+
+    total_revenue = float(actuals[actuals["tx_type"] == "revenue"]["amount"].sum())
+    operating_costs = float(
+        abs(actuals[actuals["tx_type"].isin(["expense", "inventory"])]["amount"].sum())
+    )
+    profit_and_loss = total_revenue - operating_costs
+
+    cash_balance = float(
+        actuals[actuals["payment_method"] == "cash"]["amount"].sum()
+    )
+    bank_balance = float(
+        actuals[actuals["payment_method"] != "cash"]["amount"].sum()
+    )
+    total_cash_and_bank = cash_balance + bank_balance
+
+    # Track active overdraft (negative bank balance) and active short-term borrowings
+    overdraft_used = float(max(0.0, -bank_balance))
+    borrowings_rows = actuals[
+        actuals["category"].str.lower().str.contains("borrowing|loan")
+    ]
+    short_term_borrowings = float(max(0.0, borrowings_rows["amount"].sum()))
+
+    return {
+        "total_revenue": total_revenue,
+        "operating_costs": operating_costs,
+        "profit_and_loss": profit_and_loss,
+        "cash_balance": cash_balance,
+        "bank_balance": bank_balance,
+        "total_cash_and_bank": total_cash_and_bank,
+        "overdraft_used": overdraft_used,
+        "short_term_borrowings": short_term_borrowings,
+        "total_debt_and_overdraft": overdraft_used + short_term_borrowings,
+    }
+
+
+def evaluate_non_recurring_events(events: list[dict]) -> dict:
+    """Computes structured financial & cashflow impacts for up to 5 non-recurring events."""
+    total_revenue_delta = 0.0
+    total_cost_delta = 0.0
+    total_cashflow_delta = 0.0
+    summaries: list[str] = []
+
+    for idx, ev in enumerate(events, start=1):
+        name = (ev.get("description") or f"Event {idx}").strip()
+        affected_tx = (ev.get("affected_tx") or "revenue").lower()
+        inv_type = ev.get("affected_inventory") or "All Inventories"
+        damage_pct = float(ev.get("damage_pct") or 0.0)
+        start_d = pd.to_datetime(ev.get("start_date")).normalize()
+        end_d = pd.to_datetime(ev.get("end_date")).normalize()
+
+        if not name or damage_pct == 0.0:
+            continue
+
+        active_days = max(1, int((end_d - start_d).days) + 1)
+        scale_factor = damage_pct / 100.0
+        inv_factor = 1.0 if inv_type == "All Inventories" else 0.35
+
+        # Base daily magnitudes for a 5-employee convenience store
+        if affected_tx == "revenue":
+            rev_impact = -round(140.0 * active_days * scale_factor * inv_factor, 2)
+            cost_impact = 0.0
+            cf_impact = rev_impact
+            summaries.append(
+                f"'{name}' ({start_d.date()} to {end_d.date()}, {inv_type}, {damage_pct:.0f}% impact): "
+                f"estimated revenue change of €{rev_impact:,.2f} and cashflow impact of €{cf_impact:,.2f}."
+            )
+        elif affected_tx == "inventories":
+            # Supply disruption lowers supplier cost outflow but can also reduce sellable stock revenue
+            cost_impact = round(45.0 * active_days * scale_factor * inv_factor, 2)  # positive = cost reduction
+            rev_impact = -round(60.0 * active_days * scale_factor * inv_factor, 2)
+            cf_impact = round(cost_impact + rev_impact, 2)
+            summaries.append(
+                f"'{name}' ({start_d.date()} to {end_d.date()}, {inv_type}, {damage_pct:.0f}% supply impact): "
+                f"reduces inventory costs by €{cost_impact:,.2f}, decreases revenue by €{abs(rev_impact):,.2f}, "
+                f"net cashflow impact €{cf_impact:,.2f}."
+            )
+        else:  # tax or other charges
+            cost_impact = -round(35.0 * active_days * scale_factor, 2)
+            rev_impact = 0.0
+            cf_impact = cost_impact
+            summaries.append(
+                f"'{name}' ({start_d.date()} to {end_d.date()}, {affected_tx}): "
+                f"adds €{abs(cost_impact):,.2f} in tax/other charges and €{cf_impact:,.2f} cashflow impact."
+            )
+
+        total_revenue_delta += rev_impact
+        total_cost_delta += cost_impact
+        total_cashflow_delta += cf_impact
+
+    return {
+        "total_revenue_delta": round(total_revenue_delta, 2),
+        "total_cost_delta": round(total_cost_delta, 2),
+        "total_cashflow_delta": round(total_cashflow_delta, 2),
+        "summaries": summaries,
+    }
+
+
+def build_owner_forecast(
+    df: pd.DataFrame,
+    horizon_days: int = 30,
     scenario: str = "Realistic",
-    alert_threshold: float = 2000.0,
-    delay_supplier_days: int = 0,
-    accelerate_invoices_days: int = 0,
+    apply_dpo_20: bool = False,
+    apply_payroll_15th: bool = False,
+    apply_loan_1000: bool = False,
+    events: list[dict] | None = None,
 ) -> pd.DataFrame:
     """
-    Produces a daily cash flow table combining historical actuals and
-    scenario-adjusted future projections with shortage flags.
+    Projects daily cashflow and cumulative net profit/cash balance over 30/60/90 days,
+    comparing baseline (before Area 2 & Area 4 changes) vs adjusted (after changes).
     """
-    if transactions_df.empty:
-        return pd.DataFrame(
-            columns=[
-                "date",
-                "net_flow",
-                "balance",
-                "period",
-                "below_threshold",
-                "below_zero",
-            ]
-        )
-
-    cfg = SCENARIO_CONFIG.get(scenario, SCENARIO_CONFIG["Realistic"])
-    df = transactions_df.copy()
-    df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+    events = events or []
+    rev_cfg = REVENUE_SCENARIOS.get(scenario, REVENUE_SCENARIOS["Realistic"])
+    rev_mult = float(rev_cfg["revenue_multiplier"])
 
     actuals = df[df["status"] == "actual"].copy()
     planned = df[df["status"] != "actual"].copy()
 
-    # Anchor forecast start at the latest actual date (or min date if no actuals exist)
-    anchor_date = actuals["date"].max() if not actuals.empty else df["date"].min()
-    forecast_end_date = anchor_date + timedelta(days=horizon_days)
+    anchor = TODAY
+    end_dt = anchor + timedelta(days=horizon_days)
+    cal = pd.date_range(start=anchor, end=end_dt, freq="D")
 
-    # Adjust planned items according to scenario and simulated user actions
-    adjusted_planned_rows = []
+    # Baseline daily cashflow & profit from planned rows + baseline daily run-rate
+    base_cf = pd.Series(0.0, index=cal)
+    base_profit = pd.Series(0.0, index=cal)
+
+    # Smooth baseline daily revenue & recurring store costs across forecast horizon
+    avg_daily_rev = 85.0 * rev_mult
+    avg_daily_cost = 65.0
+    base_cf += avg_daily_rev - avg_daily_cost
+    base_profit += avg_daily_rev - avg_daily_cost
+
     for _, row in planned.iterrows():
+        dt = pd.to_datetime(row["date"]).normalize()
         amt = float(row["amount"])
-        item_date = row["date"]
-        cat_lower = row["category"].lower()
+        cat = str(row["category"]).lower()
+        tx_type = str(row["tx_type"]).lower()
 
-        if amt > 0:
-            # Expected inflow / client invoice
-            delay = int(row["expected_delay_days"]) + int(cfg["extra_delay_days"])
-            if "invoice" in cat_lower or row["type"] == "inflow":
-                delay = delay - int(accelerate_invoices_days)
-            shifted_date = item_date + timedelta(days=delay)
-            adjusted_amt = amt * float(cfg["inflow_multiplier"])
-        else:
-            # Expected outflow / expense
-            delay = int(row["expected_delay_days"])
-            if "supplier" in cat_lower and delay_supplier_days > 0:
-                delay += int(delay_supplier_days)
-            shifted_date = item_date + timedelta(days=delay)
-            adjusted_amt = amt * float(cfg["outflow_multiplier"])
+        if tx_type == "revenue":
+            amt = amt * rev_mult
 
-        adjusted_planned_rows.append(
-            {
-                "date": shifted_date,
-                "net_flow": adjusted_amt,
-                "period": "Forecast",
-                "description": row["description"],
-                "category": row["category"],
-            }
-        )
+        if anchor <= dt <= end_dt:
+            base_cf.loc[dt] += amt
+            if tx_type in {"revenue", "expense", "inventory"}:
+                base_profit.loc[dt] += amt
 
-    actual_flows = pd.DataFrame(
-        {
-            "date": actuals["date"],
-            "net_flow": actuals["amount"].astype(float),
-            "period": "Actual",
-            "description": actuals["description"],
-            "category": actuals["category"],
-        }
-    )
+    # Adjusted series (starts from baseline, applies Area 2 recommendations + Area 4 events)
+    adj_cf = base_cf.copy()
+    adj_profit = base_profit.copy()
 
-    planned_flows = pd.DataFrame(adjusted_planned_rows)
-    if not planned_flows.empty:
-        planned_flows = planned_flows[
-            (planned_flows["date"] > anchor_date)
-            & (planned_flows["date"] <= forecast_end_date)
-        ]
+    if apply_dpo_20:
+        # Extending DPO from 10 to 20 days starting 2026-12-10 defers ~10 days of supplier outflow
+        dpo_shift_start = pd.Timestamp("2026-12-10")
+        for dt in adj_cf.index:
+            if dt >= dpo_shift_start and dt < dpo_shift_start + timedelta(days=10):
+                adj_cf.loc[dt] += 132.0  # frees cash on December window
+            elif dt >= dpo_shift_start + timedelta(days=10) and dt < dpo_shift_start + timedelta(days=20):
+                adj_cf.loc[dt] -= 132.0
 
-    combined = pd.concat([actual_flows, planned_flows], ignore_index=True)
+    if apply_payroll_15th:
+        # Shifting monthly payroll from 10th to 15th relieves cash on the 10th-14th
+        for dt in adj_cf.index:
+            if dt.day == 10:
+                adj_cf.loc[dt] += 8600.0
+                target_15 = adjust_payroll_date(dt.replace(day=15), latest_day=15)
+                if target_15 in adj_cf.index:
+                    adj_cf.loc[target_15] -= 8600.0
 
-    start_date = combined["date"].min()
-    end_date = max(forecast_end_date, combined["date"].max())
-    full_calendar = pd.date_range(start=start_date, end=end_date, freq="D")
+    if apply_loan_1000:
+        # Short-term 60-day loan of EUR 1,000 drawn before 2026-12-20 (modeled on 2026-12-18)
+        draw_dt = pd.Timestamp("2026-12-18")
+        if draw_dt in adj_cf.index:
+            adj_cf.loc[draw_dt] += 1000.0
+        repay_dt = draw_dt + timedelta(days=60)
+        if repay_dt in adj_cf.index:
+            adj_cf.loc[repay_dt] -= 1015.0  # principal + minor 1.5% short-term interest
+            adj_profit.loc[repay_dt] -= 15.0
 
-    daily_flows = (
-        combined.groupby("date", as_index=False)["net_flow"].sum()
-        if not combined.empty
-        else pd.DataFrame(columns=["date", "net_flow"])
-    )
+    # Apply Area 4 non-recurring events across their active date ranges
+    for ev in events:
+        name = (ev.get("description") or "").strip()
+        dmg = float(ev.get("damage_pct") or 0.0)
+        if not name or dmg == 0.0:
+            continue
+        s_dt = max(anchor, pd.to_datetime(ev.get("start_date")).normalize())
+        e_dt = min(end_dt, pd.to_datetime(ev.get("end_date")).normalize())
+        if s_dt > e_dt:
+            continue
 
-    timeline = pd.DataFrame({"date": full_calendar})
-    timeline = timeline.merge(daily_flows, on="date", how="left")
-    timeline["net_flow"] = timeline["net_flow"].fillna(0.0)
-    timeline["balance"] = timeline["net_flow"].cumsum()
-    timeline["period"] = np.where(timeline["date"] <= anchor_date, "Actual", "Forecast")
-    timeline["below_threshold"] = (timeline["period"] == "Forecast") & (
-        timeline["balance"] < float(alert_threshold)
-    )
-    timeline["below_zero"] = (timeline["period"] == "Forecast") & (
-        timeline["balance"] < 0.0
-    )
+        affected_tx = (ev.get("affected_tx") or "revenue").lower()
+        inv_type = ev.get("affected_inventory") or "All Inventories"
+        inv_factor = 1.0 if inv_type == "All Inventories" else 0.35
+        scale = dmg / 100.0
 
-    # Attach readable event notes for days with non-zero cash movement
-    if not combined.empty:
-        notes = (
-            combined.groupby("date")["description"]
-            .apply(lambda s: "; ".join(s.unique()))
-            .reset_index()
-            .rename(columns={"description": "events"})
-        )
-        timeline = timeline.merge(notes, on="date", how="left")
-    else:
-        timeline["events"] = ""
-    timeline["events"] = timeline["events"].fillna("")
+        for dt in pd.date_range(start=s_dt, end=e_dt, freq="D"):
+            if affected_tx == "revenue":
+                delta = -140.0 * scale * inv_factor
+                adj_cf.loc[dt] += delta
+                adj_profit.loc[dt] += delta
+            elif affected_tx == "inventories":
+                cost_saved = 45.0 * scale * inv_factor
+                rev_lost = -60.0 * scale * inv_factor
+                adj_cf.loc[dt] += cost_saved + rev_lost
+                adj_profit.loc[dt] += cost_saved + rev_lost
+            else:
+                tax_delta = -35.0 * scale
+                adj_cf.loc[dt] += tax_delta
+                adj_profit.loc[dt] += tax_delta
 
-    return timeline
+    start_bal = float(actuals["amount"].sum()) if not actuals.empty else 0.0
+    start_pnl = float(
+        actuals[actuals["tx_type"] == "revenue"]["amount"].sum()
+        - abs(actuals[actuals["tx_type"].isin(["expense", "inventory"])]["amount"].sum())
+    ) if not actuals.empty else 0.0
 
-
-def summarize_projection(
-    timeline_df: pd.DataFrame, horizon_days: int = 90
-) -> dict:
-    forecast_df = timeline_df[timeline_df["period"] == "Forecast"].copy()
-    actual_df = timeline_df[timeline_df["period"] == "Actual"].copy()
-
-    current_balance = (
-        float(actual_df["balance"].iloc[-1]) if not actual_df.empty else 0.0
-    )
-
-    def balance_at(days: int) -> float:
-        if forecast_df.empty:
-            return current_balance
-        start_f = forecast_df["date"].min()
-        target_date = start_f + timedelta(days=days)
-        subset = forecast_df[forecast_df["date"] <= target_date]
-        return (
-            float(subset["balance"].iloc[-1])
-            if not subset.empty
-            else float(forecast_df["balance"].iloc[-1])
-        )
-
-    alerts_df = forecast_df[forecast_df["below_threshold"]]
-    first_alert_date = (
-        alerts_df["date"].iloc[0].strftime("%Y-%m-%d") if not alerts_df.empty else None
-    )
-    lowest_forecast_balance = (
-        float(forecast_df["balance"].min()) if not forecast_df.empty else current_balance
-    )
-    lowest_forecast_date = (
-        forecast_df.loc[forecast_df["balance"].idxmin(), "date"].strftime("%Y-%m-%d")
-        if not forecast_df.empty
-        else None
-    )
-
-    return {
-        "current_balance": current_balance,
-        "bal_30d": balance_at(min(30, horizon_days)),
-        "bal_60d": balance_at(min(60, horizon_days)),
-        "bal_90d": balance_at(horizon_days),
-        "alert_count": int(len(alerts_df)),
-        "first_alert_date": first_alert_date,
-        "lowest_forecast_balance": lowest_forecast_balance,
-        "lowest_forecast_date": lowest_forecast_date,
-        "alerts_df": alerts_df,
-    }
+    out = pd.DataFrame({
+        "date": cal,
+        "cashflow_before": base_cf.values,
+        "cashflow_after": adj_cf.values,
+        "cum_cash_before": start_bal + np.cumsum(base_cf.values),
+        "cum_cash_after": start_bal + np.cumsum(adj_cf.values),
+        "cum_profit_before": start_pnl + np.cumsum(base_profit.values),
+        "cum_profit_after": start_pnl + np.cumsum(adj_profit.values),
+    })
+    return out
