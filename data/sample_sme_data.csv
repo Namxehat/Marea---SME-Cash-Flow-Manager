@@ -1,24 +1,85 @@
-date,description,category,type,amount,status,expected_delay_days
-2026-10-25,Opening Bank Balance,Cash Reserve,inflow,18500.00,actual,0
-2026-10-28,Client A - Workshop Batch,Client Invoice,inflow,6400.00,actual,5
-2026-11-01,Commercial Lease,Rent,outflow,-2400.00,actual,0
-2026-11-03,Staff Payroll,Payroll,outflow,-7800.00,actual,0
-2026-11-07,Raw Materials Order,Supplier,outflow,-3200.00,actual,0
-2026-11-12,Client B - Catering & Events,Client Invoice,inflow,5100.00,actual,8
-2026-11-15,Monthly VAT Settlement,Taxes,outflow,-1950.00,actual,0
-2026-11-18,Packaging & Supplies,Supplier,outflow,-1450.00,actual,0
-2026-12-01,Commercial Lease,Rent,outflow,-2400.00,planned,0
-2026-12-03,Staff Payroll,Payroll,outflow,-7800.00,planned,0
-2026-12-06,Client C - Retainer Invoice,Client Invoice,inflow,4800.00,planned,12
-2026-12-10,Major Supplier Restock,Supplier,outflow,-6500.00,planned,0
-2026-12-15,Monthly VAT Settlement,Taxes,outflow,-2200.00,planned,0
-2026-12-20,Client A - Follow-up Invoice,Client Invoice,inflow,5900.00,planned,10
-2027-01-02,Commercial Lease,Rent,outflow,-2400.00,planned,0
-2027-01-04,Staff Payroll,Payroll,outflow,-7800.00,planned,0
-2027-01-12,Client B - Holiday Order,Client Invoice,inflow,7200.00,planned,7
-2027-01-15,Monthly VAT Settlement,Taxes,outflow,-2100.00,planned,0
-2027-01-22,Equipment & Maintenance,Supplier,outflow,-2600.00,planned,0
-2027-02-01,Commercial Lease,Rent,outflow,-2400.00,planned,0
-2027-02-03,Staff Payroll,Payroll,outflow,-7800.00,planned,0
-2027-02-10,Client C - Q1 Invoice,Client Invoice,inflow,6300.00,planned,9
-2027-02-15,Monthly VAT Settlement,Taxes,outflow,-2050.00,planned,0
+tx_id,date,description,category,tx_type,inventory_type,quantity,unit_price,amount,payment_method,status,payment_term_days,expected_delay_days,entry_hash
+TX-0001,2025-01-02,Opening Bank & Cash Float,Cash Reserve,revenue,None,0,0.00,14500.00,bank,actual,0,0,
+TX-0002,2025-01-05,January Store Rent,Rent,expense,None,0,0.00,-2200.00,bank,actual,0,0,
+TX-0003,2025-01-08,Produce & Bananas Delivery,Inventory Receipt,inventory,Bananas & Produce,300,1.40,-420.00,bank,actual,10,0,
+TX-0004,2025-01-10,December 2024 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8500.00,bank,actual,0,0,
+TX-0005,2025-01-18,Pay Produce & Bananas Invoice,Inventory Payment,inventory,Bananas & Produce,300,1.40,-420.00,bank,actual,10,0,
+TX-0006,2025-01-25,January Convenience Sales (Cash & Card),Daily Sales,revenue,Beverages & Snacks,420,4.50,1890.00,cash,actual,0,0,
+TX-0007,2025-02-05,February Store Rent,Rent,expense,None,0,0.00,-2200.00,bank,actual,0,0,
+TX-0008,2025-02-10,January 2025 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8500.00,bank,actual,0,0,
+TX-0009,2025-02-24,February Convenience Sales,Daily Sales,revenue,Beverages & Snacks,390,4.50,1755.00,bank,actual,0,0,
+TX-0010,2025-03-05,March Store Rent,Rent,expense,None,0,0.00,-2200.00,bank,actual,0,0,
+TX-0011,2025-03-10,February 2025 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8500.00,bank,actual,0,0,
+TX-0012,2025-03-22,Spring Protest Traffic Dip & Sales,Daily Sales,revenue,All Inventories,260,4.20,1092.00,cash,actual,0,0,
+TX-0013,2025-04-05,April Store Rent,Rent,expense,None,0,0.00,-2200.00,bank,actual,0,0,
+TX-0014,2025-04-10,March 2025 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8500.00,bank,actual,0,0,
+TX-0015,2025-04-26,April Convenience Sales,Daily Sales,revenue,Dairy & Bakery,460,3.80,1748.00,bank,actual,0,0,
+TX-0016,2025-05-05,May Store Rent,Rent,expense,None,0,0.00,-2200.00,bank,actual,0,0,
+TX-0017,2025-05-12,April 2025 Payroll (Shifted from May 10 Sat),Payroll,expense,None,0,0.00,-8500.00,bank,actual,0,2,
+TX-0018,2025-05-28,May Convenience Sales,Daily Sales,revenue,Beverages & Snacks,520,4.60,2392.00,cash,actual,0,0,
+TX-0019,2025-06-05,June Store Rent,Rent,expense,None,0,0.00,-2200.00,bank,actual,0,0,
+TX-0020,2025-06-10,May 2025 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8500.00,bank,actual,0,0,
+TX-0021,2025-06-27,Early Summer Convenience Sales,Daily Sales,revenue,Beverages & Snacks,610,4.70,2867.00,bank,actual,0,0,
+TX-0022,2025-07-05,July Store Rent,Rent,expense,None,0,0.00,-2200.00,bank,actual,0,0,
+TX-0023,2025-07-10,June 2025 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8500.00,bank,actual,0,0,
+TX-0024,2025-07-29,July Holiday Peak Sales,Daily Sales,revenue,Beverages & Snacks,740,4.80,3552.00,cash,actual,0,0,
+TX-0025,2025-08-05,August Store Rent,Rent,expense,None,0,0.00,-2200.00,bank,actual,0,0,
+TX-0026,2025-08-11,July 2025 Payroll (Shifted from Aug 10 Sun),Payroll,expense,None,0,0.00,-8500.00,bank,actual,0,1,
+TX-0027,2025-08-27,August Summer Sales,Daily Sales,revenue,Household & Pantry,540,4.40,2376.00,bank,actual,0,0,
+TX-0028,2025-09-05,September Store Rent,Rent,expense,None,0,0.00,-2200.00,bank,actual,0,0,
+TX-0029,2025-09-10,August 2025 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8500.00,bank,actual,0,0,
+TX-0030,2025-09-25,September Convenience Sales,Daily Sales,revenue,Dairy & Bakery,470,3.90,1833.00,cash,actual,0,0,
+TX-0031,2025-10-05,October Store Rent,Rent,expense,None,0,0.00,-2200.00,bank,actual,0,0,
+TX-0032,2025-10-10,September 2025 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8500.00,bank,actual,0,0,
+TX-0033,2025-10-27,October Convenience Sales,Daily Sales,revenue,Beverages & Snacks,490,4.50,2205.00,bank,actual,0,0,
+TX-0034,2025-11-05,November Store Rent,Rent,expense,None,0,0.00,-2200.00,bank,actual,0,0,
+TX-0035,2025-11-10,October 2025 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8500.00,bank,actual,0,0,
+TX-0036,2025-11-26,November Convenience Sales,Daily Sales,revenue,Household & Pantry,510,4.50,2295.00,cash,actual,0,0,
+TX-0037,2025-12-05,December Store Rent,Rent,expense,None,0,0.00,-2200.00,bank,actual,0,0,
+TX-0038,2025-12-10,November 2025 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8500.00,bank,actual,0,0,
+TX-0039,2025-12-23,Holiday Season Peak Sales,Daily Sales,revenue,Beverages & Snacks,820,4.90,4018.00,bank,actual,0,0,
+TX-0040,2026-01-05,January 2026 Store Rent,Rent,expense,None,0,0.00,-2250.00,bank,actual,0,0,
+TX-0041,2026-01-12,December 2025 Payroll (Shifted from Jan 10 Sat),Payroll,expense,None,0,0.00,-8600.00,bank,actual,0,2,
+TX-0042,2026-01-24,January 2026 Convenience Sales,Daily Sales,revenue,Dairy & Bakery,430,3.90,1677.00,cash,actual,0,0,
+TX-0043,2026-02-05,February 2026 Store Rent,Rent,expense,None,0,0.00,-2250.00,bank,actual,0,0,
+TX-0044,2026-02-10,January 2026 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8600.00,bank,actual,0,0,
+TX-0045,2026-02-25,February 2026 Convenience Sales,Daily Sales,revenue,Beverages & Snacks,410,4.50,1845.00,bank,actual,0,0,
+TX-0046,2026-03-05,March 2026 Store Rent,Rent,expense,None,0,0.00,-2250.00,bank,actual,0,0,
+TX-0047,2026-03-10,February 2026 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8600.00,bank,actual,0,0,
+TX-0048,2026-03-26,March Convenience Sales,Daily Sales,revenue,Household & Pantry,480,4.50,2160.00,cash,actual,0,0,
+TX-0049,2026-04-05,April 2026 Store Rent,Rent,expense,None,0,0.00,-2250.00,bank,actual,0,0,
+TX-0050,2026-04-10,March 2026 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8600.00,bank,actual,0,0,
+TX-0051,2026-04-27,April Convenience Sales,Daily Sales,revenue,Beverages & Snacks,530,4.60,2438.00,bank,actual,0,0,
+TX-0052,2026-05-05,May 2026 Store Rent,Rent,expense,None,0,0.00,-2250.00,bank,actual,0,0,
+TX-0053,2026-05-11,April 2026 Payroll (Shifted from May 10 Sun),Payroll,expense,None,0,0.00,-8600.00,bank,actual,0,1,
+TX-0054,2026-05-27,May Convenience Sales,Daily Sales,revenue,Dairy & Bakery,550,4.00,2200.00,cash,actual,0,0,
+TX-0055,2026-06-05,June 2026 Store Rent,Rent,expense,None,0,0.00,-2250.00,bank,actual,0,0,
+TX-0056,2026-06-10,May 2026 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8600.00,bank,actual,0,0,
+TX-0057,2026-06-28,June Summer Sales,Daily Sales,revenue,Beverages & Snacks,650,4.75,3087.50,bank,actual,0,0,
+TX-0058,2026-07-05,July 2026 Store Rent,Rent,expense,None,0,0.00,-2250.00,bank,actual,0,0,
+TX-0059,2026-07-10,June 2026 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8600.00,bank,actual,0,0,
+TX-0060,2026-07-28,July Peak Sales,Daily Sales,revenue,Beverages & Snacks,760,4.85,3686.00,cash,actual,0,0,
+TX-0061,2026-08-05,August 2026 Store Rent,Rent,expense,None,0,0.00,-2250.00,bank,actual,0,0,
+TX-0062,2026-08-10,July 2026 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8600.00,bank,actual,0,0,
+TX-0063,2026-08-26,August Summer Sales,Daily Sales,revenue,Household & Pantry,560,4.50,2520.00,bank,actual,0,0,
+TX-0064,2026-09-05,September 2026 Store Rent,Rent,expense,None,0,0.00,-2250.00,bank,actual,0,0,
+TX-0065,2026-09-10,August 2026 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8600.00,bank,actual,0,0,
+TX-0066,2026-09-24,September Protest Disruption & Sales,Daily Sales,revenue,All Inventories,280,4.30,1204.00,cash,actual,0,0,
+TX-0067,2026-10-05,October 2026 Store Rent,Rent,expense,None,0,0.00,-2250.00,bank,actual,0,0,
+TX-0068,2026-10-12,September 2026 Payroll (Shifted from Oct 10 Sat),Payroll,expense,None,0,0.00,-8600.00,bank,actual,0,2,
+TX-0069,2026-10-20,Short-Term Cash Bridge Drawdown,Short-Term Borrowing,financing,None,0,0.00,2500.00,bank,actual,60,0,
+TX-0070,2026-10-28,October Convenience Sales,Daily Sales,revenue,Beverages & Snacks,520,4.60,2392.00,bank,actual,0,0,
+TX-0071,2026-11-05,November 2026 Store Rent,Rent,expense,None,0,0.00,-2250.00,bank,actual,0,0,
+TX-0072,2026-11-10,October 2026 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8600.00,bank,actual,0,0,
+TX-0073,2026-11-14,Bank Overdraft Facility Usage,Bank Overdraft,financing,None,0,0.00,-1200.00,bank,actual,0,0,
+TX-0074,2026-11-18,Bananas & Produce Restock Receipt,Inventory Receipt,inventory,Bananas & Produce,350,1.50,-525.00,bank,actual,10,0,
+TX-0075,2026-11-23,Quarterly Tax & VAT Payment,Tax,expense,None,0,0.00,-1850.00,bank,actual,0,0,
+TX-0076,2026-11-25,November Sales Up to Today,Daily Sales,revenue,Beverages & Snacks,490,4.60,2254.00,cash,actual,0,0,
+TX-0077,2026-12-05,December 2026 Store Rent,Rent,expense,None,0,0.00,-2250.00,bank,planned,0,0,
+TX-0078,2026-12-10,November 2026 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8600.00,bank,planned,0,0,
+TX-0079,2026-12-12,December Supplier Invoice Settlement,Inventory Payment,inventory,Beverages & Snacks,600,2.20,-1320.00,bank,planned,10,0,
+TX-0080,2026-12-22,Year-End Holiday Convenience Sales,Daily Sales,revenue,Beverages & Snacks,780,4.85,3783.00,bank,planned,0,0,
+TX-0081,2027-01-05,January 2027 Store Rent,Rent,expense,None,0,0.00,-2250.00,bank,planned,0,0,
+TX-0082,2027-01-11,December 2026 Payroll (Shifted from Jan 10 Sun),Payroll,expense,None,0,0.00,-8600.00,bank,planned,0,1,
+TX-0083,2027-02-05,February 2027 Store Rent,Rent,expense,None,0,0.00,-2250.00,bank,planned,0,0,
+TX-0084,2027-02-10,January 2027 Payroll (5 Staff),Payroll,expense,None,0,0.00,-8600.00,bank,planned,0,0,
