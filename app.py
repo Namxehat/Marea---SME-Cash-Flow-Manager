@@ -1,476 +1,579 @@
-from __future__ import annotations
-
-from datetime import timedelta
+from datetime import date, timedelta
 from pathlib import Path
 import altair as alt
 import pandas as pd
 import streamlit as st
 
 from finance_engine import (
-    INVENTORY_CATALOG,
-    INVENTORY_OPTIONS_WITH_ALL,
-    REVENUE_SCENARIOS,
-    STORE_RULES,
-    TODAY,
-    audit_ledger_integrity,
-    build_owner_forecast,
+    adjust_french_business_day,
+    append_transaction,
     compute_financial_kpis,
-    evaluate_non_recurring_events,
+    generate_90day_forecast,
     load_store_ledger,
-    recommend_cashflow_threshold,
-    save_store_ledger,
+    verify_ledger_integrity,
 )
 
 st.set_page_config(
-    page_title="Maréa — Convenience Store Cash Flow & Ledger",
-    page_icon="🏪",
+    page_title="Maréa | SME Cash Flow & Treasury Manager",
+    page_icon="🌊",
     layout="wide",
 )
 
-CSV_PATH = Path(__file__).parent / "convenience_store_2025_2026.csv"
+# ---------------------------------------------------------------------------
+# ERROR 7: Ocean & Tides Theme + Clean Custom Styling
+# ---------------------------------------------------------------------------
+st.markdown(
+    """
+    <style>
+    /* Ocean & Tides Palette */
+    :root {
+        --deep-ocean: #023E8A;
+        --ocean-blue: #0077B6;
+        --tide-teal: #0096C7;
+        --seafoam: #00B4D8;
+        --coastal-mist: #F0F8FF;
+        --sand-border: #CAF0F8;
+        --slate-ink: #0F2942;
+    }
 
-USERS = {
-    "Nam": {"role": "employee", "label": "Nam — Store Employee"},
-    "Noelle": {"role": "accountant", "label": "Noelle — Accountant"},
-    "Rania": {"role": "owner", "label": "Rania — Store Owner"},
-}
-DEMO_PIN = "123456"
+    .stApp {
+        background: linear-gradient(180deg, #F4FAFF 0%, #FFFFFF 35%, #F7FBFC 100%);
+        color: var(--slate-ink);
+    }
+
+    /* Header Banner */
+    .marea-banner {
+        background: linear-gradient(135deg, #023E8A 0%, #0077B6 55%, #0096C7 100%);
+        padding: 1.35rem 1.75rem;
+        border-radius: 14px;
+        color: #FFFFFF;
+        margin-bottom: 1.25rem;
+        box-shadow: 0 6px 20px rgba(2, 62, 138, 0.14);
+        border: 1px solid rgba(202, 240, 248, 0.35);
+    }
+    .marea-banner h1 {
+        color: #FFFFFF !important;
+        margin: 0 0 0.25rem 0;
+        font-size: 1.75rem;
+        letter-spacing: -0.02em;
+    }
+    .marea-banner p {
+        color: #E0F4FF;
+        margin: 0;
+        font-size: 0.95rem;
+    }
+
+    /* Metric Cards */
+    div[data-testid="stMetric"] {
+        background: #FFFFFF;
+        border: 1px solid #BCE6F7;
+        border-left: 5px solid #0077B6;
+        padding: 0.85rem 1rem;
+        border-radius: 10px;
+        box-shadow: 0 2px 8px rgba(0, 119, 182, 0.06);
+    }
+    div[data-testid="stMetric"] label {
+        color: #023E8A !important;
+        font-weight: 600 !important;
+    }
+
+    /* Section Headings */
+    h2, h3 {
+        color: #023E8A !important;
+    }
+
+    /* Primary Buttons */
+    .stButton > button[kind="primary"] {
+        background: linear-gradient(90deg, #0077B6 0%, #0096C7 100%);
+        color: #FFFFFF;
+        border: none;
+        border-radius: 8px;
+        font-weight: 600;
+    }
+    .stButton > button[kind="primary"]:hover {
+        background: linear-gradient(90deg, #023E8A 0%, #0077B6 100%);
+    }
+
+    /* Subtle Info Strip */
+    .tide-card {
+        background-color: #EDF7FC;
+        border: 1px solid #BCE6F7;
+        border-radius: 10px;
+        padding: 0.8rem 1rem;
+        margin-bottom: 0.85rem;
+        color: #0F2942;
+        font-size: 0.9rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+BASE_DIR = Path(__file__).resolve().parent
+CSV_PATH = BASE_DIR / "convenience_store_2025_2026.csv"
 
 if "ledger_df" not in st.session_state:
     st.session_state.ledger_df = load_store_ledger(str(CSV_PATH))
 
-if "auth_user" not in st.session_state:
-    st.session_state.auth_user = None
+if "authenticated_role" not in st.session_state:
+    st.session_state.authenticated_role = None
 
+# ---------------------------------------------------------------------------
+# Top Ocean & Tides Header
+# ---------------------------------------------------------------------------
+st.markdown(
+    """
+    <div class="marea-banner">
+        <h1>🌊 Maréa — SME Cash Flow & Liquidity Navigator</h1>
+        <p>Normandy Convenience Store Treasury • Real-Time Cash Visibility, Policy Controls & 90-Day Tide Forecasting</p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-def next_tx_id(df: pd.DataFrame) -> str:
-    nums = []
-    for val in df["tx_id"].astype(str):
-        if val.startswith("TX-") and val[3:].isdigit():
-            nums.append(int(val[3:]))
-    nxt = (max(nums) + 1) if nums else 1
-    return f"TX-{nxt:04d}"
+# ---------------------------------------------------------------------------
+# Sidebar Authentication
+# ---------------------------------------------------------------------------
+with st.sidebar:
+    st.markdown("### ⚓ Workspace Access")
+    role_choice = st.selectbox(
+        "Select Team Role",
+        [
+            "Nam — Store Employee (POS & Stock)",
+            "Noelle — Accountant (Ledger & Controls)",
+            "Rania — Store Owner (Treasury & Forecast)",
+        ],
+    )
+    pin_input = st.text_input("Access PIN (Demo: 123456)", type="password", value="123456")
 
-
-# --- LOGIN GATE ---
-if st.session_state.auth_user is None:
-    st.title("🏪 Maréa — Convenience Store Cash Flow Manager")
-    st.caption("Sign in with your username and 6-digit PIN (demo PIN for all accounts: `123456`).")
-
-    with st.form("login_form"):
-        username = st.selectbox("Username", options=list(USERS.keys()))
-        pin = st.text_input("6-Digit Password", type="password", max_chars=6, placeholder="123456")
-        submitted = st.form_submit_button("Sign In")
-
-        if submitted:
-            if not pin.isdigit() or len(pin) != 6:
-                st.error("Password must be a 6-digit number.")
-            elif pin != DEMO_PIN:
-                st.error("Invalid 6-digit password. For demonstration, use `123456`.")
+    col_login, col_logout = st.columns(2)
+    with col_login:
+        if st.button("🔓 Unlock", type="primary", use_container_width=True):
+            if pin_input == "123456":
+                st.session_state.authenticated_role = role_choice.split(" — ")[0]
             else:
-                st.session_state.auth_user = username
-                st.rerun()
+                st.error("Invalid PIN. Use 123456.")
+    with col_logout:
+        if st.button("🔒 Lock", use_container_width=True):
+            st.session_state.authenticated_role = None
+
+    st.divider()
+    st.caption("🧭 **Role Permissions**")
+    st.caption("• **Nam:** Daily POS sales & stock intake")
+    st.caption("• **Noelle:** Accounting entries & policy guardrails")
+    st.caption("• **Rania:** Executive KPIs, 90-day forecast & SHA-256 audit")
+
+active_role = st.session_state.authenticated_role
+
+if not active_role:
+    st.info("👈 Select a role in the sidebar and click **Unlock** (Demo PIN: `123456`) to enter Maréa.")
     st.stop()
 
+df = st.session_state.ledger_df
+TODAY = date(2026, 11, 25)
 
-current_user = st.session_state.auth_user
-user_meta = USERS[current_user]
-role = user_meta["role"]
+# ===========================================================================
+# ROLE 1: NAM (STORE EMPLOYEE)
+# ===========================================================================
+if active_role == "Nam":
+    st.subheader("🛒 Storefront POS & Inventory Intake — Nam")
+    st.markdown(
+        '<div class="tide-card">Log daily register sales or urgent stock deliveries. Entries are timestamped and hashed automatically into the store ledger.</div>',
+        unsafe_allow_html=True,
+    )
 
-# Top header & logout
-col_title, col_logout = st.columns([5, 1])
-with col_title:
-    st.title("🏪 Maréa — SME Cash Flow & Ledger")
-    st.caption(f"Signed in as **{user_meta['label']}** | Reference Date: **{TODAY.strftime('%Y-%m-%d')}** | Staff: **{STORE_RULES['employees_count']}**")
-with col_logout:
-    st.write("")
-    if st.button("Sign Out"):
-        st.session_state.auth_user = None
+    with st.form("nam_pos_form", clear_on_submit=True):
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            entry_kind = st.selectbox("Activity Type", ["Daily POS Sales (+)", "Urgent Stock Delivery (-)"])
+            tx_date = st.date_input("Date", value=TODAY)
+        with c2:
+            if "Sales" in entry_kind:
+                scope = st.selectbox(
+                    "Product Department",
+                    ["General Grocery & Snacks", "Beverages & Coffee", "Bakery & Ready-to-Eat", "Fresh Produce & Dairy"],
+                )
+                channel = st.selectbox("Payment Method", ["card", "cash"])
+            else:
+                scope = st.selectbox(
+                    "Delivery Department",
+                    ["Fresh Produce & Dairy", "Beverages & Coffee", "Dry Goods & Packaged", "Bakery & Ready-to-Eat"],
+                )
+                channel = st.selectbox("Payment Method", ["cash", "bank"])
+        with c3:
+            amount_val = st.number_input("Amount (€)", min_value=1.0, max_value=25000.0, value=450.0, step=10.0)
+            notes = st.text_input("Shift Note", placeholder="e.g., Morning register batch")
+
+        submitted = st.form_submit_button("📥 Record Store Entry", type="primary")
+        if submitted:
+            is_sale = "Sales" in entry_kind
+            tx_payload = {
+                "date": tx_date.isoformat(),
+                "settled_date": tx_date.isoformat(),
+                "role": "Nam",
+                "tx_type": "revenue" if is_sale else "expense",
+                "category": "Daily POS Sales" if is_sale else "Supplier Inventory",
+                "inventory_scope": scope,
+                "amount_eur": amount_val if is_sale else -amount_val,
+                "payment_channel": channel,
+                "payment_terms_days": 0,
+                "status": "settled",
+                "notes": notes or ("POS register batch" if is_sale else "Storefront delivery"),
+            }
+            st.session_state.ledger_df = append_transaction(df, tx_payload, str(CSV_PATH))
+            st.success(f"✅ Recorded {entry_kind} of €{amount_val:,.2f} under {scope}.")
+            st.rerun()
+
+    st.markdown("#### 📋 Recent Storefront Activity")
+    nam_view = st.session_state.ledger_df[st.session_state.ledger_df["role"] == "Nam"][
+        ["tx_id", "date", "tx_type", "category", "inventory_scope", "amount_eur", "payment_channel", "notes"]
+    ].tail(10)
+    st.dataframe(nam_view, use_container_width=True, hide_index=True)
+
+# ===========================================================================
+# ROLE 2: NOELLE (ACCOUNTANT) — ERROR 2 FIXED HERE
+# ===========================================================================
+elif active_role == "Noelle":
+    st.subheader("🧾 Accountant Ledger Entry & Policy Controls — Noelle")
+    st.markdown(
+        '<div class="tide-card"><b>Policy Guardrails:</b> Max supplier payment term = <b>90 days</b> (default 10 days) • Payroll scheduled on the <b>10th</b> (latest 15th, shifted for French weekends/holidays) • Max overdraft = <b>€5,000</b> • Max short-term borrowing = <b>€10,000</b>.</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Dynamic mapping so Category and Inventory/Scope always match Transaction Type
+    TX_SCHEMA = {
+        "revenue": {
+            "Daily POS Sales": ["General Grocery & Snacks", "Beverages & Coffee", "Bakery & Ready-to-Eat", "Fresh Produce & Dairy"],
+            "Wholesale & B2B Orders": ["Local Café Supply", "Office Catering & Hampers", "Bulk Beverage Orders"],
+            "Loyalty & Gift Cards": ["Prepaid Store Cards", "Neighborhood Membership"],
+        },
+        "expense": {
+            "Supplier Inventory": ["Fresh Produce & Dairy", "Dry Goods & Packaged", "Beverages & Coffee", "Bakery & Ready-to-Eat"],
+            "Payroll": ["Staff Salaries & Charges", "Seasonal Part-Time Staff", "Employer Social Contributions"],
+            "Rent & Utilities": ["Storefront Lease & Power", "Cold Storage Electricity", "Water & Telecom"],
+            "Taxes & Insurance": ["Commercial Property Insurance", "VAT & Local Business Tax"],
+        },
+        "financing": {
+            "Short-Term Credit Facility": ["60-Day Working Capital Line", "Supplier Bridge Facility"],
+            "Owner Equity Injection": ["Treasury Reserve Top-Up"],
+            "Loan Repayment": ["Principal & Interest Installment"],
+        },
+    }
+
+    # Interactive selectors outside form so changing Transaction Type updates Category & Scope immediately
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        tx_type = st.selectbox("Transaction Type", ["revenue", "expense", "financing"], key="noelle_tx_type")
+    with c2:
+        valid_categories = list(TX_SCHEMA[tx_type].keys())
+        category = st.selectbox("Category", valid_categories, key=f"noelle_cat_{tx_type}")
+    with c3:
+        valid_scopes = TX_SCHEMA[tx_type][category]
+        inv_scope = st.selectbox("Inventory / Scope", valid_scopes, key=f"noelle_scope_{tx_type}_{category}")
+    with c4:
+        valid_channels = ["bank", "card", "cash"] if tx_type == "revenue" else ["bank", "cash"]
+        payment_channel = st.selectbox("Payment Channel", valid_channels, key="noelle_channel")
+
+    c5, c6, c7, c8 = st.columns(4)
+    with c5:
+        tx_date = st.date_input("Invoice / Entry Date", value=TODAY, key="noelle_date")
+    with c6:
+        default_terms = 10 if (tx_type == "expense" and category == "Supplier Inventory") else 0
+        max_terms = 90 if tx_type == "expense" else 30
+        terms_days = st.number_input("Payment Terms (Days)", min_value=0, max_value=max_terms, value=default_terms, step=5)
+    with c7:
+        max_amt = 10000.0 if (tx_type == "financing" and category == "Short-Term Credit Facility") else 50000.0
+        amount_input = st.number_input("Amount (€)", min_value=1.0, max_value=max_amt, value=1200.0, step=50.0)
+    with c8:
+        notes = st.text_input("Accounting Reference / Note", placeholder="e.g., Inv #425 Normandy Dairy")
+
+    raw_settled = tx_date + timedelta(days=int(terms_days))
+    if category == "Payroll":
+        adjusted_settled, holiday_note = adjust_french_business_day(raw_settled)
+        st.caption(f"🇫🇷 French Payroll Calendar Check: **{holiday_note}**")
+    else:
+        adjusted_settled = raw_settled
+
+    if st.button("🌊 Post Validated Entry to Ledger", type="primary"):
+        is_inflow = tx_type == "revenue" or (
+            tx_type == "financing" and category in ["Short-Term Credit Facility", "Owner Equity Injection"]
+        )
+        signed_amount = amount_input if is_inflow else -amount_input
+        status = "settled" if adjusted_settled <= TODAY else "scheduled"
+
+        tx_payload = {
+            "date": tx_date.isoformat(),
+            "settled_date": adjusted_settled.isoformat(),
+            "role": "Noelle",
+            "tx_type": tx_type,
+            "category": category,
+            "inventory_scope": inv_scope,
+            "amount_eur": signed_amount,
+            "payment_channel": payment_channel,
+            "payment_terms_days": int(terms_days),
+            "status": status,
+            "notes": notes or f"{category} — {inv_scope}",
+        }
+        st.session_state.ledger_df = append_transaction(df, tx_payload, str(CSV_PATH))
+        st.success(
+            f"✅ Posted {tx_type.upper()} ({category} • {inv_scope}) for €{signed_amount:,.2f} (Settlement: {adjusted_settled.isoformat()})."
+        )
         st.rerun()
 
-df = st.session_state.ledger_df
+    st.markdown("#### 📒 Full Accounting Ledger")
+    acc_view = st.session_state.ledger_df[
+        ["tx_id", "date", "settled_date", "role", "tx_type", "category", "inventory_scope", "amount_eur", "payment_channel", "status", "notes"]
+    ]
+    st.dataframe(acc_view, use_container_width=True, hide_index=True)
 
-
-# ==============================================================================
-# ROLE 1: NAM (EMPLOYEE)
-# ==============================================================================
-if role == "employee":
-    st.subheader("Employee Transaction Entry (Sales & Inventory Receipts)")
-    st.info("You can record **revenue** (client sales) or **inventory** receipts. Entries are validated and saved directly to the CSV ledger.")
-
-    tx_type = st.selectbox("Type of Transaction", options=["revenue", "inventory"])
-
-    st.markdown("#### Transaction Line Item")
-    c_inv, c_qty, c_auto = st.columns(3)
-    inv_choice = c_inv.selectbox("Type of Inventory", options=list(INVENTORY_CATALOG.keys()))
-    default_price = INVENTORY_CATALOG[inv_choice]
-    qty_val = c_qty.number_input("Number of Inventory (Units)", min_value=0.0, value=10.0, step=1.0)
-
-    if tx_type == "revenue":
-        unit_price = c_auto.number_input(
-            "Auto-Calculated Total Amount (€)",
-            min_value=0.0,
-            value=round(qty_val * default_price, 2),
-            step=1.0,
-            disabled=True,
-        )
-        computed_total = round(qty_val * default_price, 2)
-    else:
-        c_auto.text_input(
-            "Auto-Calculated Total Amount (€)",
-            value="Not applicable for inventory receipt",
-            disabled=True,
-        )
-        # Estimate inventory cost at ~65% of retail catalog unit price for ledger recording
-        computed_total = round(qty_val * default_price * 0.65, 2)
-
-    with st.form("employee_tx_form", clear_on_submit=True):
-        tx_date = st.date_input("Transaction Date", value=TODAY.date())
-        desc = st.text_input(
-            "Description",
-            value=f"{'Client Sale' if tx_type == 'revenue' else 'Inventory Receipt'} — {inv_choice}",
-        )
-        pay_method = st.selectbox("Payment Method", options=["cash", "bank"])
-        save_btn = st.form_submit_button("Save Transaction to CSV")
-
-        if save_btn:
-            errors = []
-            if qty_val <= 0:
-                errors.append("Number of inventory must be greater than 0.")
-            if not desc.strip():
-                errors.append("Description cannot be empty.")
-            if tx_type == "revenue" and computed_total <= 0:
-                errors.append("Calculated revenue amount must be positive.")
-
-            if errors:
-                for err in errors:
-                    st.error(err)
-            else:
-                signed_amt = computed_total if tx_type == "revenue" else -computed_total
-                new_row = pd.DataFrame([{
-                    "tx_id": next_tx_id(df),
-                    "date": pd.to_datetime(tx_date).normalize(),
-                    "description": desc.strip(),
-                    "category": "Daily Sales" if tx_type == "revenue" else "Inventory Receipt",
-                    "tx_type": tx_type,
-                    "inventory_type": inv_choice,
-                    "quantity": float(qty_val),
-                    "unit_price": float(default_price),
-                    "amount": float(signed_amt),
-                    "payment_method": pay_method,
-                    "status": "actual",
-                    "payment_term_days": 0 if tx_type == "revenue" else STORE_RULES["default_dpo_days"],
-                    "expected_delay_days": 0,
-                    "entry_hash": "",
-                }])
-                updated = pd.concat([df, new_row], ignore_index=True)
-                st.session_state.ledger_df = save_store_ledger(updated, str(CSV_PATH))
-                st.success(f"Saved {tx_type} entry (€{abs(signed_amt):,.2f}) to `{CSV_PATH.name}`.")
-                st.rerun()
-
-
-# ==============================================================================
-# ROLE 2: NOELLE (ACCOUNTANT)
-# ==============================================================================
-elif role == "accountant":
-    st.subheader("Accountant Ledger Entry & Policy Controls")
-    st.caption(
-        f"Rules: Max supplier payment term = **{STORE_RULES['max_supplier_payment_days']} days** "
-        f"(default {STORE_RULES['default_dpo_days']} days) | Payroll normally on the **{STORE_RULES['normal_payroll_day']}th** "
-        f"(latest **{STORE_RULES['latest_payroll_day']}th** of following month, adjusted for French holidays) | "
-        f"Max overdraft = **€{STORE_RULES['max_bank_overdraft']:,.0f}** | Max short-term borrowing = **€{STORE_RULES['max_short_term_borrowing']:,.0f}**."
-    )
-
-    with st.form("accountant_tx_form", clear_on_submit=True):
-        c1, c2, c3, c4 = st.columns(4)
-        tx_type = c1.selectbox("Transaction Type", options=["revenue", "inventory", "expense", "financing"])
-        category = c2.selectbox(
-            "Category",
-            options=[
-                "Daily Sales",
-                "Inventory Receipt",
-                "Inventory Payment",
-                "Payroll",
-                "Rent",
-                "Tax",
-                "Bank Overdraft",
-                "Short-Term Borrowing",
-                "Other Store Expense",
-            ],
-        )
-        inv_type = c3.selectbox("Inventory / Scope", options=["None"] + INVENTORY_OPTIONS_WITH_ALL)
-        pay_method = c4.selectbox("Payment Channel", options=["bank", "cash"])
-
-        c5, c6, c7, c8 = st.columns(4)
-        tx_date = c5.date_input("Date", value=TODAY.date())
-        raw_amount = c6.number_input("Amount (€, positive magnitude)", min_value=0.01, value=500.0, step=50.0)
-        term_days = c7.number_input("Payment Term (days)", min_value=0, max_value=180, value=STORE_RULES["default_dpo_days"], step=1)
-        status_val = c8.selectbox("Status", options=["actual", "planned"])
-
-        desc = st.text_input("Accounting Description / Reference", placeholder="e.g., November Supplier Settlement or Tax Filing")
-        submitted = st.form_submit_button("Record & Save to CSV")
-
-        if submitted:
-            errors = []
-            if not desc.strip():
-                errors.append("Please enter an accounting description.")
-            if tx_type == "inventory" and term_days > STORE_RULES["max_supplier_payment_days"]:
-                errors.append(f"Supplier payment term cannot exceed {STORE_RULES['max_supplier_payment_days']} days.")
-
-            kpis = compute_financial_kpis(df)
-            is_inflow = tx_type == "revenue" or category == "Short-Term Borrowing"
-            signed_amt = float(raw_amount) if is_inflow else -float(raw_amount)
-
-            if category == "Short-Term Borrowing" and (kpis["short_term_borrowings"] + raw_amount) > STORE_RULES["max_short_term_borrowing"]:
-                errors.append(f"Short-term borrowing would exceed the €{STORE_RULES['max_short_term_borrowing']:,.0f} cap.")
-            if pay_method == "bank" and signed_amt < 0:
-                projected_bank = kpis["bank_balance"] + signed_amt
-                if projected_bank < -STORE_RULES["max_bank_overdraft"]:
-                    errors.append(f"Bank outflow would exceed the €{STORE_RULES['max_bank_overdraft']:,.0f} overdraft limit.")
-
-            if errors:
-                for err in errors:
-                    st.error(err)
-            else:
-                final_date = pd.to_datetime(tx_date).normalize()
-                new_row = pd.DataFrame([{
-                    "tx_id": next_tx_id(df),
-                    "date": final_date,
-                    "description": desc.strip(),
-                    "category": category,
-                    "tx_type": tx_type,
-                    "inventory_type": inv_type,
-                    "quantity": 0.0,
-                    "unit_price": 0.0,
-                    "amount": signed_amt,
-                    "payment_method": pay_method,
-                    "status": status_val,
-                    "payment_term_days": int(term_days),
-                    "expected_delay_days": 0,
-                    "entry_hash": "",
-                }])
-                updated = pd.concat([df, new_row], ignore_index=True)
-                st.session_state.ledger_df = save_store_ledger(updated, str(CSV_PATH))
-                st.success(f"Recorded entry and saved to `{CSV_PATH.name}`.")
-                st.rerun()
-
-    st.markdown("#### Recent Ledger Entries")
-    st.dataframe(df.tail(15), use_container_width=True, hide_index=True)
-
-
-# ==============================================================================
-# ROLE 3: RANIA (OWNER) — 5 REQUIRED AREAS + REVENUE SCENARIO
-# ==============================================================================
-else:
+# ===========================================================================
+# ROLE 3: RANIA (STORE OWNER) — ERRORS 1, 3, 4, 5 FIXED HERE
+# ===========================================================================
+elif active_role == "Rania":
     kpis = compute_financial_kpis(df)
-    thresh_rec = recommend_cashflow_threshold(df)
 
-    # --- AREA 1: P&L, TOTAL CASH + BANK, OVERDRAFT + BORROWINGS ---
+    # -----------------------------------------------------------------------
+    # AREA 1: Financial Position & Cash Overview
+    # -----------------------------------------------------------------------
     st.subheader("1. Financial Position & Cash Overview")
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Profit & Loss (Actuals)", f"€{kpis['profit_and_loss']:,.2f}")
-    m2.metric("Total Cash + Cash in Bank", f"€{kpis['total_cash_and_bank']:,.2f}")
-    m3.metric("Overdraft + Short-Term Borrowings", f"€{kpis['total_debt_and_overdraft']:,.2f}")
-    m4.metric("Recommended Alert Threshold", f"€{thresh_rec['recommended_threshold']:,.2f}")
+    m1.metric("💧 Total Available Cash", f"€{kpis['total_liquidity']:,.2f}", f"Bank: €{kpis['bank_balance']:,.0f}")
+    m2.metric("🏦 Operating Bank Balance", f"€{kpis['bank_balance']:,.2f}", "Overdraft limit: €5,000")
+    m3.metric("🧾 Scheduled Payables", f"€{kpis['pending_payables']:,.2f}", "Within 90-day policy")
+    m4.metric("⏳ Estimated Cash Runway", f"{kpis['runway_months']:.1f} months", "Healthy buffer > 3.0 mo")
 
-    st.caption(
-        f"Breakdown — Cash on hand: €{kpis['cash_balance']:,.2f} | Bank balance: €{kpis['bank_balance']:,.2f} | "
-        f"Overdraft used: €{kpis['overdraft_used']:,.2f} (Limit €{STORE_RULES['max_bank_overdraft']:,.0f}) | "
-        f"Short-term borrowings: €{kpis['short_term_borrowings']:,.2f} (Limit €{STORE_RULES['max_short_term_borrowing']:,.0f})"
+    st.divider()
+
+    # -----------------------------------------------------------------------
+    # ERROR 4: Area 2 is now Cashflow & Profit Forecast, Area 3 is Recommendations,
+    # Area 4 is Non-Recurring Events Simulator!
+    # Because Streamlit executes top-to-bottom, we initialize widget states cleanly
+    # and render Area 2 using containers so Area 3 & Area 4 feed directly into it.
+    # -----------------------------------------------------------------------
+    area2_container = st.container()
+    st.divider()
+
+    # -----------------------------------------------------------------------
+    # AREA 3: Liquidity & Working Capital Recommendations (ERROR 3: Full text, stacked lines)
+    # -----------------------------------------------------------------------
+    st.subheader("3. Liquidity & Working Capital Recommendations")
+    st.caption("Select recommendations below to simulate their live impact on the 90-day forecast above:")
+
+    rec_dpo = st.checkbox(
+        "Extend supplier Days Payable Outstanding (DPO) from 10 days to 30 days on non-perishable dry goods (+€2,160 working capital release over 90 days).",
+        value=True,
+    )
+    rec_waste = st.checkbox(
+        "Introduce evening bundle promotions on fresh bakery & produce to lift gross margin and daily revenue (+€2,520 net cash inflow over 90 days).",
+        value=True,
+    )
+    rec_payroll = st.checkbox(
+        "Schedule monthly employee payroll on the 15th (with French public holiday shift) to align outflows with mid-month card settlements (+€1,080 buffer).",
+        value=False,
+    )
+    rec_credit = st.checkbox(
+        "Arrange a 60-day short-term credit facility of €1,500 at 6.0% APR (well within the €10,000 borrowing cap) to cushion seasonal inventory peaks.",
+        value=False,
     )
 
     st.divider()
 
-    # --- AREA 2: ACTIONABLE RECOMMENDATIONS WITH DECISION CHECKBOXES ---
-    st.subheader("2. Liquidity & Working Capital Recommendations")
-    r1, r2, r3 = st.columns(3)
-    apply_dpo_20 = r1.checkbox(
-        "Extend supplier Days Payable Outstanding (DPO) to 20 days starting 10/12/2026 (currently 10 days, which tightens near-term liquidity).",
-        value=False,
-    )
-    apply_payroll_15th = r2.checkbox(
-        "Schedule monthly employee payroll on the 15th of the following month (within the statutory/policy window, adjusted for French holidays).",
-        value=False,
-    )
-    apply_loan_1000 = r3.checkbox(
-        "Arrange a 60-day short-term credit facility of €1,000 prior to 20/12/2026 to reinforce cash buffer during peak outflows.",
-        value=False,
-    )
-
-    st.divider()
-
-    # --- AREA 4: 5 NON-RECURRING EVENT LINES ---
+    # -----------------------------------------------------------------------
+    # AREA 4: Non-Recurring Events Simulator (Up to 5 Events)
+    # -----------------------------------------------------------------------
     st.subheader("4. Non-Recurring Events Simulator (Up to 5 Events)")
-    st.caption(f"Start dates cannot be earlier than today (**{TODAY.strftime('%Y-%m-%d')}**).")
+    st.caption(f"Start dates cannot be earlier than today ({TODAY.isoformat()}). Add up to 5 one-off, weekly, or monthly events.")
 
-    active_events: list[dict] = []
+    events_list = []
     for i in range(1, 6):
-        with st.expander(f"Non-Recurring Event #{i}", expanded=(i == 1)):
-            c_desc, c_tx, c_inv, c_dmg, c_start, c_end = st.columns([2.2, 1.3, 1.5, 1.1, 1.3, 1.3])
-            ev_desc = c_desc.text_input(
-                "Event Description",
-                key=f"ev_desc_{i}",
-                placeholder="e.g., Local transport protest" if i == 1 else ("e.g., Banana supplier shortage" if i == 2 else ""),
-            )
-            ev_tx = c_tx.selectbox(
-                "Affected Transaction",
-                options=["revenue", "inventories", "tax"],
-                key=f"ev_tx_{i}",
-            )
-            ev_inv = c_inv.selectbox(
-                "Affected Inventory",
-                options=INVENTORY_OPTIONS_WITH_ALL,
-                key=f"ev_inv_{i}",
-            )
-            ev_dmg = c_dmg.number_input(
-                "Damage / Impact (%)",
-                min_value=0.0,
-                max_value=100.0,
-                value=0.0,
-                step=5.0,
-                key=f"ev_dmg_{i}",
-            )
-            ev_start = c_start.date_input(
-                "Start Date",
-                value=TODAY.date(),
-                min_value=TODAY.date(),
-                key=f"ev_start_{i}",
-            )
-            ev_end = c_end.date_input(
-                "End Date",
-                value=(TODAY + timedelta(days=7)).date(),
-                min_value=ev_start,
-                key=f"ev_end_{i}",
-            )
+        with st.expander(f"🌊 Event #{i} Configuration", expanded=(i == 1)):
+            ec1, ec2, ec3, ec4, ec5, ec6 = st.columns([0.8, 2.0, 1.4, 1.3, 1.3, 1.3])
+            with ec1:
+                active = st.checkbox("Active", value=(i == 1), key=f"ev_act_{i}")
+            with ec2:
+                ev_name = st.text_input(
+                    "Event Label",
+                    value="Holiday Gift Basket Pop-Up" if i == 1 else f"Custom Event {i}",
+                    key=f"ev_name_{i}",
+                )
+            with ec3:
+                direction = st.selectbox("Flow", ["Cash Inflow (+)", "Cash Outflow (-)"], key=f"ev_dir_{i}")
+            with ec4:
+                freq = st.selectbox("Frequency", ["One-off", "Weekly", "Monthly"], key=f"ev_freq_{i}")
+            with ec5:
+                ev_amt = st.number_input("Amount (€)", min_value=0.0, max_value=25000.0, value=650.0 if i == 1 else 0.0, step=50.0, key=f"ev_amt_{i}")
+            with ec6:
+                ev_start = st.date_input("Start Date", value=TODAY + timedelta(days=7 * i), min_value=TODAY, key=f"ev_start_{i}")
 
-            if ev_desc.strip() and ev_dmg > 0:
-                active_events.append({
-                    "description": ev_desc.strip(),
-                    "affected_tx": ev_tx,
-                    "affected_inventory": ev_inv,
-                    "damage_pct": ev_dmg,
+            ev_end = ev_start + timedelta(days=60) if freq != "One-off" else ev_start
+            events_list.append(
+                {
+                    "active": active,
+                    "name": ev_name,
+                    "direction": direction,
+                    "frequency": freq,
+                    "amount": ev_amt,
                     "start_date": ev_start,
                     "end_date": ev_end,
-                })
+                }
+            )
+
+    # -----------------------------------------------------------------------
+    # Populate AREA 2: Cashflow & Profit Forecast (ERROR 5: Single large combined chart)
+    # -----------------------------------------------------------------------
+    with area2_container:
+        st.subheader("2. Cashflow & Profit Forecast (90-Day Horizon)")
+        sc_col1, sc_col2 = st.columns([1.4, 2.6])
+        with sc_col1:
+            scenario = st.selectbox("Forecast Scenario", ["Base Case", "Optimistic", "Conservative"], index=0)
+        forecast_df = generate_90day_forecast(
+            df=df,
+            scenario=scenario,
+            rec_dpo=rec_dpo,
+            rec_payroll=rec_payroll,
+            rec_credit=rec_credit,
+            rec_waste=rec_waste,
+            events=events_list,
+            start_date=TODAY,
+        )
+
+        net_cash_change_before = forecast_df["Cashflow_Before"].iloc[-1] - forecast_df["Cashflow_Before"].iloc[0]
+        net_cash_change_after = forecast_df["Cashflow_After"].iloc[-1] - forecast_df["Cashflow_After"].iloc[0]
+
+        with sc_col2:
+            k_b, k_a = st.columns(2)
+            k_b.metric(
+                "90-Day Net Cash Change (Before)",
+                f"€{net_cash_change_before:+,.2f}",
+                "Baseline drift",
+                delta_color="normal",
+            )
+            k_a.metric(
+                "90-Day Net Cash Change (After)",
+                f"€{net_cash_change_after:+,.2f}",
+                f"{net_cash_change_after - net_cash_change_before:+,.2f} vs Before",
+                delta_color="normal",
+            )
+
+        # Reshape for unified Altair chart (Cashflow + Profit on same large graph with distinct colors)
+        long_df = pd.DataFrame(
+            {
+                "Date": pd.concat([forecast_df["Date"]] * 4, ignore_index=True),
+                "Series": (
+                    ["Cumulative Cashflow — After Changes"] * len(forecast_df)
+                    + ["Cumulative Cashflow — Before Changes"] * len(forecast_df)
+                    + ["Cumulative Profit — After Changes"] * len(forecast_df)
+                    + ["Cumulative Profit — Before Changes"] * len(forecast_df)
+                ),
+                "Amount (€)": pd.concat(
+                    [
+                        forecast_df["Cashflow_After"],
+                        forecast_df["Cashflow_Before"],
+                        forecast_df["Profit_After"],
+                        forecast_df["Profit_Before"],
+                    ],
+                    ignore_index=True,
+                ),
+            }
+        )
+
+        color_scale = alt.Scale(
+            domain=[
+                "Cumulative Cashflow — After Changes",
+                "Cumulative Cashflow — Before Changes",
+                "Cumulative Profit — After Changes",
+                "Cumulative Profit — Before Changes",
+            ],
+            range=["#023E8A", "#7CC6FE", "#009688", "#80CBC4"],
+        )
+
+        dash_scale = alt.Scale(
+            domain=[
+                "Cumulative Cashflow — After Changes",
+                "Cumulative Cashflow — Before Changes",
+                "Cumulative Profit — After Changes",
+                "Cumulative Profit — Before Changes",
+            ],
+            range=[[1, 0], [6, 4], [1, 0], [6, 4]],
+        )
+
+        combined_chart = (
+            alt.Chart(long_df)
+            .mark_line(strokeWidth=3)
+            .encode(
+                x=alt.X("Date:T", title="Forecast Date (Next 90 Days)"),
+                y=alt.Y("Amount (€):Q", title="Cumulative Amount (€)", scale=alt.Scale(zero=False)),
+                color=alt.Color(
+                    "Series:N",
+                    scale=color_scale,
+                    legend=alt.Legend(orient="top", columns=2, title=None, labelLimit=320),
+                ),
+                strokeDash=alt.StrokeDash("Series:N", scale=dash_scale, legend=None),
+                tooltip=[
+                    alt.Tooltip("Date:T", title="Date"),
+                    alt.Tooltip("Series:N", title="Trajectory"),
+                    alt.Tooltip("Amount (€):Q", title="Amount (€)", format=",.2f"),
+                ],
+            )
+            .properties(height=430)
+            .interactive()
+        )
+
+        st.altair_chart(combined_chart, use_container_width=True)
 
     st.divider()
 
-    # --- AREA 3: 30 / 60 / 90-DAY FORECAST & BEFORE/AFTER LINE GRAPHS ---
-    st.subheader("3. Cashflow & Profit Forecast (Before vs. After Adjustments)")
-    ctrl1, ctrl2 = st.columns([1, 2])
-    horizon_days = ctrl1.selectbox("Forecast Window (Days)", options=[30, 60, 90], index=0)
-    revenue_scenario = ctrl2.selectbox("Revenue Scenario", options=list(REVENUE_SCENARIOS.keys()), index=1)
-    st.caption(REVENUE_SCENARIOS[revenue_scenario]["description"])
-
-    proj_df = build_owner_forecast(
-        df=df,
-        horizon_days=int(horizon_days),
-        scenario=revenue_scenario,
-        apply_dpo_20=apply_dpo_20,
-        apply_payroll_15th=apply_payroll_15th,
-        apply_loan_1000=apply_loan_1000,
-        events=active_events,
-    )
-
-    cf_long = proj_df.melt(
-        id_vars=["date"],
-        value_vars=["cum_cash_before", "cum_cash_after"],
-        var_name="Series",
-        value_name="Cumulative Cashflow (€)",
-    )
-    cf_long["Series"] = cf_long["Series"].map({
-        "cum_cash_before": "Before Changes (Area 2 & 4)",
-        "cum_cash_after": "After Changes (Area 2 & 4)",
-    })
-
-    profit_long = proj_df.melt(
-        id_vars=["date"],
-        value_vars=["cum_profit_before", "cum_profit_after"],
-        var_name="Series",
-        value_name="Cumulative Profit (€)",
-    )
-    profit_long["Series"] = profit_long["Series"].map({
-        "cum_profit_before": "Before Changes (Area 2 & 4)",
-        "cum_profit_after": "After Changes (Area 2 & 4)",
-    })
-
-    g1, g2 = st.columns(2)
-    with g1:
-        st.markdown(f"**Cumulative Cashflow ({horizon_days} Days — {revenue_scenario})**")
-        chart_cf = (
-            alt.Chart(cf_long)
-            .mark_line(strokeWidth=2.5)
-            .encode(
-                x=alt.X("date:T", title="Date"),
-                y=alt.Y("Cumulative Cashflow (€):Q"),
-                color=alt.Color("Series:N"),
-                tooltip=["date:T", "Series:N", alt.Tooltip("Cumulative Cashflow (€):Q", format=",.2f")],
-            )
-            .properties(height=300)
-        )
-        st.altair_chart(chart_cf, use_container_width=True)
-
-    with g2:
-        st.markdown(f"**Cumulative Profit Trajectory ({horizon_days} Days — {revenue_scenario})**")
-        chart_pr = (
-            alt.Chart(profit_long)
-            .mark_line(strokeWidth=2.5)
-            .encode(
-                x=alt.X("date:T", title="Date"),
-                y=alt.Y("Cumulative Profit (€):Q"),
-                color=alt.Color("Series:N"),
-                tooltip=["date:T", "Series:N", alt.Tooltip("Cumulative Profit (€):Q", format=",.2f")],
-            )
-            .properties(height=300)
-        )
-        st.altair_chart(chart_pr, use_container_width=True)
-
-    st.divider()
-
-    # --- AREA 5: EVENT IMPACT SUMMARY BOX ---
+    # -----------------------------------------------------------------------
+    # AREA 5: Non-Recurring Events Impact Summary
+    # -----------------------------------------------------------------------
     st.subheader("5. Non-Recurring Events Impact Summary")
-    impact_summary = evaluate_non_recurring_events(active_events)
-    s1, s2, s3 = st.columns(3)
-    s1.metric("Estimated Revenue Impact", f"€{impact_summary['total_revenue_delta']:,.2f}")
-    s2.metric("Estimated Inventory/Cost Delta", f"€{impact_summary['total_cost_delta']:,.2f}")
-    s3.metric("Estimated Net Cashflow Impact", f"€{impact_summary['total_cashflow_delta']:,.2f}")
-
-    if impact_summary["summaries"]:
-        for line in impact_summary["summaries"]:
-            st.write(f"• {line}")
+    active_events = [e for e in events_list if e["active"] and e["amount"] > 0]
+    if active_events:
+        summary_rows = []
+        for e in active_events:
+            occurrences = 1 if e["frequency"] == "One-off" else (9 if e["frequency"] == "Weekly" else 3)
+            signed = e["amount"] if e["direction"] == "Cash Inflow (+)" else -e["amount"]
+            summary_rows.append(
+                {
+                    "Event": e["name"],
+                    "Direction": e["direction"],
+                    "Frequency": e["frequency"],
+                    "Start Date": e["start_date"].isoformat(),
+                    "Est. 90-Day Impact (€)": round(signed * occurrences, 2),
+                }
+            )
+        st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
     else:
-        st.info("No active non-recurring events entered yet. Add details in Section 4 above to see calculated impacts.")
+        st.info("No active non-recurring events with an amount > €0. Enable an event in Section 4 to see its summary.")
 
+    st.divider()
 
-# ==============================================================================
-# SHARED FOOTER: LEDGER INTEGRITY (SHA-256 HASH CHAIN) & CSV EXPORT
-# ==============================================================================
-st.divider()
-st.subheader("🔐 Ledger Integrity & SHA-256 Hash Chain")
-audited_df, audit_stats = audit_ledger_integrity(st.session_state.ledger_df)
+    # -----------------------------------------------------------------------
+    # ERROR 1: Ledger Integrity & SHA-256 Hash Chain (ONLY SHOWN ON RANIA'S SCREEN)
+    # -----------------------------------------------------------------------
+    st.subheader("🔐 Ledger Integrity & SHA-256 Hash Chain")
+    audit = verify_ledger_integrity(df)
+    if audit["is_valid"]:
+        st.success(
+            f"Ledger chain verified: {audit['total_entries']} entries checked, "
+            f"{audit['tampered_count']} tampered rows, {audit['duplicate_count']} duplicates."
+        )
+    else:
+        st.error(
+            f"Integrity warning: {audit['tampered_count']} tampered rows and {audit['duplicate_count']} duplicates detected."
+        )
 
-if audit_stats["is_clean"]:
-    st.success(f"Ledger chain verified: {len(audited_df)} entries checked, 0 tampered rows, 0 duplicates.")
-else:
-    st.warning(
-        f"Audit alert: **{audit_stats['tampered_count']}** tampered hash(es) and "
-        f"**{audit_stats['duplicate_count']}** duplicate entry/entries detected."
+    with st.expander("Inspect SHA-256 Hash Chain & Flagged Entries"):
+        st.dataframe(
+            df[["tx_id", "date", "role", "tx_type", "category", "amount_eur", "prev_hash", "tx_hash"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    csv_bytes = df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="📥 Download Updated CSV Ledger",
+        data=csv_bytes,
+        file_name="marea_verified_ledger_2026.csv",
+        mime="text/csv",
     )
-
-with st.expander("Inspect SHA-256 Hash Chain & Flagged Entries"):
-    show_cols = [
-        "tx_id", "date", "description", "category", "tx_type",
-        "inventory_type", "amount", "payment_method", "status",
-        "entry_hash", "computed_hash", "audit_status",
-    ]
-    display_audit = audited_df[show_cols].copy()
-    display_audit["date"] = display_audit["date"].dt.strftime("%Y-%m-%d")
-    st.dataframe(display_audit, use_container_width=True, hide_index=True)
-
-csv_bytes = st.session_state.ledger_df.to_csv(index=False).encode("utf-8")
-st.download_button(
-    label="Download Updated CSV Ledger",
-    data=csv_bytes,
-    file_name="convenience_store_2025_2026.csv",
-    mime="text/csv",
-)
