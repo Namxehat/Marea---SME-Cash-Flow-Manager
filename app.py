@@ -410,12 +410,32 @@ elif role == "accountant":
 
 
 # ==============================================================================
-# ROLE 3: RANIA (OWNER) — OVERVIEW, ALERTS, FORECAST, ACTIONS & INTEGRITY
+# ROLE 3: RANIA (OWNER) — OVERVIEW, FORECAST, ACTIONS & LEDGER/AUDIT TAB
 # ==============================================================================
 else:
     kpis = compute_financial_kpis(df)
     thresh_rec = recommend_cashflow_threshold(df)
     opening_cash_actual = float(kpis["total_cash_and_bank"])
+    audited_df, audit_stats = audit_ledger_integrity(st.session_state.ledger_df)
+
+    # Small audit alert line right before Financial Position & Shortage Alert
+    if audit_stats["is_clean"]:
+        st.markdown(
+            f'<div style="padding:6px 12px;border-radius:8px;background:#DCFCE7;color:#15803D;'
+            f'border:1px solid #86EFAC;font-size:0.9rem;font-weight:600;margin-bottom:10px;">'
+            f'✅ Audit Status: No fault detected ({len(audited_df)} entries verified, 0 tampered, 0 duplicates).'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            f'<div style="padding:6px 12px;border-radius:8px;background:#FEF3C7;color:#B45309;'
+            f'border:1px solid #FCD34D;font-size:0.9rem;font-weight:600;margin-bottom:10px;">'
+            f'⚠️ Audit Alert: {audit_stats["tampered_count"]} tampered row(s) and '
+            f'{audit_stats["duplicate_count"]} duplicate entry/entries detected — inspect in Ledger & Audit tab.'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
     # --- AREA 1: FINANCIAL POSITION & SHORTAGE ALERT ---
     st.subheader("⚓ 1. Financial Position & Shortage Alert")
@@ -440,317 +460,322 @@ else:
 
     st.divider()
 
-    # --- AREA 2: FORECASTED CASHFLOW & PROFIT TRAJECTORY ---
-    apply_dpo_20 = bool(st.session_state.get("rec_dpo_20", False))
-    apply_payroll_15th = bool(st.session_state.get("rec_payroll_15th", False))
-    apply_loan_1000 = bool(st.session_state.get("rec_loan_1000", False))
+    tab_forecast, tab_ledger_audit = st.tabs(["📊 Forecast & Decisions", "Ledger & Audit"])
 
-    current_events: list[dict] = []
-    for i in range(1, 6):
-        ev_desc = str(st.session_state.get(f"ev_desc_{i}", "") or "").strip()
-        ev_dmg = float(st.session_state.get(f"ev_dmg_{i}", 0.0) or 0.0)
-        if ev_desc and ev_dmg > 0:
-            current_events.append({
-                "description": ev_desc,
-                "affected_tx": st.session_state.get(f"ev_tx_{i}", "revenue"),
-                "affected_inventory": st.session_state.get(f"ev_inv_{i}", "All Inventories"),
-                "damage_pct": ev_dmg,
-                "start_date": st.session_state.get(f"ev_start_{i}", TODAY.date()),
-                "end_date": st.session_state.get(f"ev_end_{i}", (TODAY + timedelta(days=7)).date()),
-            })
+    with tab_forecast:
+        # --- AREA 2: FORECASTED CASHFLOW & PROFIT TRAJECTORY ---
+        apply_dpo_20 = bool(st.session_state.get("rec_dpo_20", False))
+        apply_payroll_15th = bool(st.session_state.get("rec_payroll_15th", False))
+        apply_loan_1000 = bool(st.session_state.get("rec_loan_1000", False))
 
-    has_changes = any([apply_dpo_20, apply_payroll_15th, apply_loan_1000]) or len(current_events) > 0
-
-    if has_changes:
-        st.subheader("🌊 2. Forecasted Cashflow & Cumulative Profit Trajectory (Before vs. After Changes)")
-    else:
-        st.subheader("🌊 2. Forecasted Cashflow & Cumulative Profit Trajectory")
-
-    ctrl1, ctrl2 = st.columns([1, 2])
-    horizon_days = ctrl1.selectbox("⏳ Forecast Window (Days)", options=[30, 60, 90], index=0)
-    revenue_scenario = ctrl2.selectbox("🌤️ Revenue Scenario", options=list(REVENUE_SCENARIOS.keys()), index=1)
-    st.caption(f"ℹ️ {REVENUE_SCENARIOS[revenue_scenario]['description']}")
-
-    proj_df = build_owner_forecast(
-        df=df,
-        horizon_days=int(horizon_days),
-        scenario=revenue_scenario,
-        opening_cash=opening_cash_actual,
-        apply_dpo_20=apply_dpo_20,
-        apply_payroll_15th=apply_payroll_15th,
-        apply_loan_1000=apply_loan_1000,
-        events=current_events,
-    )
-
-    alert_before = summarize_shortage_alerts(proj_df, threshold=float(alert_threshold), col="cum_cash_before")
-    alert_after = summarize_shortage_alerts(proj_df, threshold=float(alert_threshold), col="cum_cash_after")
-
-    alert_prefix = "**Before Changes Alert:**" if has_changes else "**Shortage Alert:**"
-    ok_prefix = "**Before Changes:**" if has_changes else "**Liquidity Status:**"
-
-    if alert_before["has_shortage"]:
-        st.warning(
-            f"⚠️ {alert_prefix} Cash falls below **€{alert_threshold:,.2f}** starting **{alert_before['first_alert_date']}** "
-            f"(lowest projected balance: **€{alert_before['lowest_balance']:,.2f}** on **{alert_before['lowest_date']}**, "
-            f"{alert_before['alert_days_count']} day(s) below threshold). "
-            f"Causes: {' '.join(alert_before['causes'])}"
-        )
-    else:
-        st.success(
-            f"✅ {ok_prefix} Projected cash stays at or above **€{alert_threshold:,.2f}** over {horizon_days} days "
-            f"(lowest balance: **€{alert_before['lowest_balance']:,.2f}** on **{alert_before['lowest_date']}**)."
-        )
-
-    if has_changes:
-        after_status = (
-            "no threshold breach"
-            if not alert_after["has_shortage"]
-            else f"first alert {alert_after['first_alert_date']}, {alert_after['alert_days_count']} day(s) below threshold"
-        )
-        st.info(
-            f"🔄 **After Changes Comparison:** Lowest balance moves from **€{alert_before['lowest_balance']:,.2f}** "
-            f"to **€{alert_after['lowest_balance']:,.2f}** ({after_status})."
-        )
-
-        cf_combined_df = proj_df.melt(
-            id_vars=["date"],
-            value_vars=["cum_cash_before", "cum_cash_after"],
-            var_name="Series",
-            value_name="Forecasted Cashflow (€)",
-        )
-        cf_combined_df["Series"] = cf_combined_df["Series"].map({
-            "cum_cash_before": "Before Changes",
-            "cum_cash_after": "After Changes",
-        })
-
-        profit_combined_df = proj_df.melt(
-            id_vars=["date"],
-            value_vars=["cum_profit_before", "cum_profit_after"],
-            var_name="Series",
-            value_name="Cumulative Profit (€)",
-        )
-        profit_combined_df["Series"] = profit_combined_df["Series"].map({
-            "cum_profit_before": "Before Changes",
-            "cum_profit_after": "After Changes",
-        })
-
-        cf_color_scale = alt.Scale(
-            domain=["Before Changes", "After Changes"],
-            range=["#1D4ED8", "#F97316"],
-        )
-        profit_color_scale = alt.Scale(
-            domain=["Before Changes", "After Changes"],
-            range=["#0F172A", "#E11D48"],
-        )
-
-        st.markdown(f"**💧 Forecasted Cashflow — Before vs. After Changes ({horizon_days} Days — {revenue_scenario})**")
-        chart_cf = (
-            alt.Chart(cf_combined_df)
-            .mark_line(strokeWidth=3)
-            .encode(
-                x=alt.X("date:T", title="Date"),
-                y=alt.Y("Forecasted Cashflow (€):Q", title="Forecasted Cashflow (€)"),
-                color=alt.Color("Series:N", scale=cf_color_scale, title="Scenario Stage"),
-                strokeDash=alt.StrokeDash(
-                    "Series:N",
-                    scale=alt.Scale(domain=["Before Changes", "After Changes"], range=[[6, 4], [1, 0]]),
-                    legend=None,
-                ),
-                tooltip=[
-                    alt.Tooltip("date:T", title="Date"),
-                    alt.Tooltip("Series:N", title="Stage"),
-                    alt.Tooltip("Forecasted Cashflow (€):Q", title="Cash (€)", format=",.2f"),
-                ],
-            )
-            .properties(height=340)
-        )
-        st.altair_chart(chart_cf, use_container_width=True)
-
-        st.markdown(f"**📊 Cumulative Profit Trajectory — Before vs. After Changes ({horizon_days} Days — {revenue_scenario})**")
-        chart_profit = (
-            alt.Chart(profit_combined_df)
-            .mark_line(strokeWidth=3)
-            .encode(
-                x=alt.X("date:T", title="Date"),
-                y=alt.Y("Cumulative Profit (€):Q", title="Cumulative Profit (€)"),
-                color=alt.Color("Series:N", scale=profit_color_scale, title="Scenario Stage"),
-                strokeDash=alt.StrokeDash(
-                    "Series:N",
-                    scale=alt.Scale(domain=["Before Changes", "After Changes"], range=[[6, 4], [1, 0]]),
-                    legend=None,
-                ),
-                tooltip=[
-                    alt.Tooltip("date:T", title="Date"),
-                    alt.Tooltip("Series:N", title="Stage"),
-                    alt.Tooltip("Cumulative Profit (€):Q", title="Profit (€)", format=",.2f"),
-                ],
-            )
-            .properties(height=340)
-        )
-        st.altair_chart(chart_profit, use_container_width=True)
-    else:
-        st.markdown(f"**💧 Forecasted Cashflow ({horizon_days} Days — {revenue_scenario})**")
-        chart_cf = (
-            alt.Chart(proj_df)
-            .mark_line(strokeWidth=3, color="#1D4ED8")
-            .encode(
-                x=alt.X("date:T", title="Date"),
-                y=alt.Y("cum_cash_before:Q", title="Forecasted Cashflow (€)"),
-                tooltip=[
-                    alt.Tooltip("date:T", title="Date"),
-                    alt.Tooltip("cum_cash_before:Q", title="Forecasted Cash (€)", format=",.2f"),
-                ],
-            )
-            .properties(height=340)
-        )
-        st.altair_chart(chart_cf, use_container_width=True)
-
-        st.markdown(f"**📊 Cumulative Profit Trajectory ({horizon_days} Days — {revenue_scenario})**")
-        chart_profit = (
-            alt.Chart(proj_df)
-            .mark_line(strokeWidth=3, color="#0F172A")
-            .encode(
-                x=alt.X("date:T", title="Date"),
-                y=alt.Y("cum_profit_before:Q", title="Cumulative Profit (€)"),
-                tooltip=[
-                    alt.Tooltip("date:T", title="Date"),
-                    alt.Tooltip("cum_profit_before:Q", title="Cumulative Profit (€)", format=",.2f"),
-                ],
-            )
-            .properties(height=340)
-        )
-        st.altair_chart(chart_profit, use_container_width=True)
-
-    st.divider()
-
-    # --- AREA 3: ACTIONABLE RECOMMENDATIONS ---
-    st.subheader("🧭 3. Liquidity & Working Capital Recommendations")
-    st.caption("☑️ Toggle actions below to compare Before vs. After cash balance and profit above.")
-
-    with st.container(border=True):
-        st.checkbox(
-            "📦 **Action 1 — Supplier Payment Terms (DPO):** Extend supplier DPO to 20 days from 10/12/2026 to ease near-term cash outflows.",
-            key="rec_dpo_20",
-        )
-
-    with st.container(border=True):
-        st.checkbox(
-            "💼 **Action 2 — Monthly Payroll Timing:** Align monthly payroll timing on the 15th (within policy rules, adjusted for French holidays).",
-            key="rec_payroll_15th",
-        )
-
-    with st.container(border=True):
-        st.checkbox(
-            f"🛟 **Action 3 — Short-Term Liquidity Bridge:** Draw €{STORE_RULES['recommended_loan_amount']:,.0f} on 01/12/2026 and model {STORE_RULES['recommended_loan_term_days']}-day repayment + {STORE_RULES['recommended_loan_interest_pct']}% interest.",
-            key="rec_loan_1000",
-        )
-
-    st.divider()
-
-    # --- AREA 4: 5 NON-RECURRING EVENT LINES ---
-    st.subheader("⚡ 4. Non-Recurring Events Simulator (Up to 5 Events)")
-    st.caption(f"📅 Start dates cannot be earlier than today (**{TODAY.strftime('%Y-%m-%d')}**).")
-
-    active_events: list[dict] = []
-    for i in range(1, 6):
-        with st.expander(f"🌊 Non-Recurring Event #{i}", expanded=(i == 1)):
-            c_desc, c_tx, c_inv, c_dmg, c_start, c_end = st.columns([2.2, 1.3, 1.5, 1.1, 1.3, 1.3])
-            ev_desc = c_desc.text_input(
-                "📝 Event Description",
-                key=f"ev_desc_{i}",
-                placeholder="e.g., Local transport protest" if i == 1 else ("e.g., Banana supplier shortage" if i == 2 else ""),
-            )
-            ev_tx = c_tx.selectbox(
-                "📂 Affected Transaction",
-                options=["revenue", "inventories", "tax"],
-                key=f"ev_tx_{i}",
-            )
-            ev_inv = c_inv.selectbox(
-                "📦 Affected Inventory",
-                options=INVENTORY_OPTIONS_WITH_ALL,
-                key=f"ev_inv_{i}",
-            )
-            ev_dmg = c_dmg.number_input(
-                "📉 Damage / Impact (%)",
-                min_value=0.0,
-                max_value=100.0,
-                value=0.0,
-                step=5.0,
-                key=f"ev_dmg_{i}",
-            )
-            ev_start = c_start.date_input(
-                "📅 Start Date",
-                value=TODAY.date(),
-                min_value=TODAY.date(),
-                key=f"ev_start_{i}",
-            )
-            ev_end = c_end.date_input(
-                "🏁 End Date",
-                value=(TODAY + timedelta(days=7)).date(),
-                min_value=ev_start,
-                key=f"ev_end_{i}",
-            )
-
-            if ev_desc.strip() and ev_dmg > 0:
-                active_events.append({
-                    "description": ev_desc.strip(),
-                    "affected_tx": ev_tx,
-                    "affected_inventory": ev_inv,
+        current_events: list[dict] = []
+        for i in range(1, 6):
+            ev_desc = str(st.session_state.get(f"ev_desc_{i}", "") or "").strip()
+            ev_dmg = float(st.session_state.get(f"ev_dmg_{i}", 0.0) or 0.0)
+            if ev_desc and ev_dmg > 0:
+                current_events.append({
+                    "description": ev_desc,
+                    "affected_tx": st.session_state.get(f"ev_tx_{i}", "revenue"),
+                    "affected_inventory": st.session_state.get(f"ev_inv_{i}", "All Inventories"),
                     "damage_pct": ev_dmg,
-                    "start_date": ev_start,
-                    "end_date": ev_end,
+                    "start_date": st.session_state.get(f"ev_start_{i}", TODAY.date()),
+                    "end_date": st.session_state.get(f"ev_end_{i}", (TODAY + timedelta(days=7)).date()),
                 })
 
-    st.divider()
+        has_changes = any([apply_dpo_20, apply_payroll_15th, apply_loan_1000]) or len(current_events) > 0
 
-    # --- AREA 5: EVENT IMPACT SUMMARY BOX ---
-    st.subheader("📋 5. Non-Recurring Events Impact Summary")
-    impact_summary = evaluate_non_recurring_events(active_events)
-    s1, s2, s3 = st.columns(3)
-    s1.metric("📉 Estimated Revenue Impact", f"€{impact_summary['total_revenue_delta']:,.2f}")
-    s2.metric("📦 Estimated Inventory/Cost Delta", f"€{impact_summary['total_cost_delta']:,.2f}")
-    s3.metric("🌊 Estimated Net Cashflow Impact", f"€{impact_summary['total_cashflow_delta']:,.2f}")
+        if has_changes:
+            st.subheader("🌊 2. Forecasted Cashflow & Cumulative Profit Trajectory (Before vs. After Changes)")
+        else:
+            st.subheader("🌊 2. Forecasted Cashflow & Cumulative Profit Trajectory")
 
-    if impact_summary["summaries"]:
-        for line in impact_summary["summaries"]:
-            st.write(f"🌊 {line}")
-    else:
-        st.info("ℹ️ No active non-recurring events entered yet. Add details in Section 4 above to see calculated impacts.")
+        ctrl1, ctrl2 = st.columns([1, 2])
+        horizon_days = ctrl1.selectbox("⏳ Forecast Window (Days)", options=[30, 60, 90], index=0)
+        revenue_scenario = ctrl2.selectbox("🌤️ Revenue Scenario", options=list(REVENUE_SCENARIOS.keys()), index=1)
+        st.caption(f"ℹ️ {REVENUE_SCENARIOS[revenue_scenario]['description']}")
 
-    # --- OWNER-ONLY: LEDGER INTEGRITY (SHA-256 HASH CHAIN) & CSV EXPORT ---
-    st.divider()
-    st.subheader("🔐 Ledger Integrity & SHA-256 Hash Chain")
-    audited_df, audit_stats = audit_ledger_integrity(st.session_state.ledger_df)
-
-    if audit_stats["is_clean"]:
-        st.success(f"✅ Ledger chain verified: {len(audited_df)} entries checked, 0 tampered rows, 0 duplicates.")
-    else:
-        st.warning(
-            f"⚠️ Audit alert: **{audit_stats['tampered_count']}** tampered hash(es) and "
-            f"**{audit_stats['duplicate_count']}** duplicate entry/entries detected."
+        proj_df = build_owner_forecast(
+            df=df,
+            horizon_days=int(horizon_days),
+            scenario=revenue_scenario,
+            opening_cash=opening_cash_actual,
+            apply_dpo_20=apply_dpo_20,
+            apply_payroll_15th=apply_payroll_15th,
+            apply_loan_1000=apply_loan_1000,
+            events=current_events,
         )
 
-    with st.expander("🔍 Inspect SHA-256 Hash Chain & Flagged Entries"):
-        if audited_df.empty:
-            st.info("No ledger records available to inspect.")
-        else:
-            show_cols = [
-                c for c in [
-                    "tx_id", "date", "description", "category", "tx_type",
-                    "inventory_type", "amount", "payment_method", "status",
-                    "entry_hash", "computed_hash", "audit_status",
-                ]
-                if c in audited_df.columns
-            ]
-            display_audit = audited_df[show_cols].copy()
-            if "date" in display_audit.columns:
-                display_audit["date"] = pd.to_datetime(display_audit["date"], errors="coerce").dt.strftime("%Y-%m-%d")
-            st.dataframe(display_audit, use_container_width=True, hide_index=True)
+        alert_before = summarize_shortage_alerts(proj_df, threshold=float(alert_threshold), col="cum_cash_before")
+        alert_after = summarize_shortage_alerts(proj_df, threshold=float(alert_threshold), col="cum_cash_after")
 
-    csv_bytes = st.session_state.ledger_df.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label="📥 Download Updated CSV Ledger",
-        data=csv_bytes,
-        file_name="convenience_store_2025_2026.csv",
-        mime="text/csv",
-    )
+        alert_prefix = "**Before Changes Alert:**" if has_changes else "**Shortage Alert:**"
+        ok_prefix = "**Before Changes:**" if has_changes else "**Liquidity Status:**"
+
+        if alert_before["has_shortage"]:
+            st.warning(
+                f"⚠️ {alert_prefix} Cash falls below **€{alert_threshold:,.2f}** starting **{alert_before['first_alert_date']}** "
+                f"(lowest projected balance: **€{alert_before['lowest_balance']:,.2f}** on **{alert_before['lowest_date']}**, "
+                f"{alert_before['alert_days_count']} day(s) below threshold). "
+                f"Causes: {' '.join(alert_before['causes'])}"
+            )
+        else:
+            st.success(
+                f"✅ {ok_prefix} Projected cash stays at or above **€{alert_threshold:,.2f}** over {horizon_days} days "
+                f"(lowest balance: **€{alert_before['lowest_balance']:,.2f}** on **{alert_before['lowest_date']}**)."
+            )
+
+        if has_changes:
+            after_status = (
+                "no threshold breach"
+                if not alert_after["has_shortage"]
+                else f"first alert {alert_after['first_alert_date']}, {alert_after['alert_days_count']} day(s) below threshold"
+            )
+            st.info(
+                f"🔄 **After Changes Comparison:** Lowest balance moves from **€{alert_before['lowest_balance']:,.2f}** "
+                f"to **€{alert_after['lowest_balance']:,.2f}** ({after_status})."
+            )
+
+            cf_combined_df = proj_df.melt(
+                id_vars=["date"],
+                value_vars=["cum_cash_before", "cum_cash_after"],
+                var_name="Series",
+                value_name="Forecasted Cashflow (€)",
+            )
+            cf_combined_df["Series"] = cf_combined_df["Series"].map({
+                "cum_cash_before": "Before Changes",
+                "cum_cash_after": "After Changes",
+            })
+
+            profit_combined_df = proj_df.melt(
+                id_vars=["date"],
+                value_vars=["cum_profit_before", "cum_profit_after"],
+                var_name="Series",
+                value_name="Cumulative Profit (€)",
+            )
+            profit_combined_df["Series"] = profit_combined_df["Series"].map({
+                "cum_profit_before": "Before Changes",
+                "cum_profit_after": "After Changes",
+            })
+
+            cf_color_scale = alt.Scale(
+                domain=["Before Changes", "After Changes"],
+                range=["#1D4ED8", "#F97316"],
+            )
+            profit_color_scale = alt.Scale(
+                domain=["Before Changes", "After Changes"],
+                range=["#0F172A", "#E11D48"],
+            )
+
+            st.markdown(f"**💧 Forecasted Cashflow — Before vs. After Changes ({horizon_days} Days — {revenue_scenario})**")
+            chart_cf = (
+                alt.Chart(cf_combined_df)
+                .mark_line(strokeWidth=3)
+                .encode(
+                    x=alt.X("date:T", title="Date"),
+                    y=alt.Y("Forecasted Cashflow (€):Q", title="Forecasted Cashflow (€)"),
+                    color=alt.Color("Series:N", scale=cf_color_scale, title="Scenario Stage"),
+                    strokeDash=alt.StrokeDash(
+                        "Series:N",
+                        scale=alt.Scale(domain=["Before Changes", "After Changes"], range=[[6, 4], [1, 0]]),
+                        legend=None,
+                    ),
+                    tooltip=[
+                        alt.Tooltip("date:T", title="Date"),
+                        alt.Tooltip("Series:N", title="Stage"),
+                        alt.Tooltip("Forecasted Cashflow (€):Q", title="Cash (€)", format=",.2f"),
+                    ],
+                )
+                .properties(height=340)
+            )
+            st.altair_chart(chart_cf, use_container_width=True)
+
+            st.markdown(f"**📊 Cumulative Profit Trajectory — Before vs. After Changes ({horizon_days} Days — {revenue_scenario})**")
+            chart_profit = (
+                alt.Chart(profit_combined_df)
+                .mark_line(strokeWidth=3)
+                .encode(
+                    x=alt.X("date:T", title="Date"),
+                    y=alt.Y("Cumulative Profit (€):Q", title="Cumulative Profit (€)"),
+                    color=alt.Color("Series:N", scale=profit_color_scale, title="Scenario Stage"),
+                    strokeDash=alt.StrokeDash(
+                        "Series:N",
+                        scale=alt.Scale(domain=["Before Changes", "After Changes"], range=[[6, 4], [1, 0]]),
+                        legend=None,
+                    ),
+                    tooltip=[
+                        alt.Tooltip("date:T", title="Date"),
+                        alt.Tooltip("Series:N", title="Stage"),
+                        alt.Tooltip("Cumulative Profit (€):Q", title="Profit (€)", format=",.2f"),
+                    ],
+                )
+                .properties(height=340)
+            )
+            st.altair_chart(chart_profit, use_container_width=True)
+        else:
+            st.markdown(f"**💧 Forecasted Cashflow ({horizon_days} Days — {revenue_scenario})**")
+            chart_cf = (
+                alt.Chart(proj_df)
+                .mark_line(strokeWidth=3, color="#1D4ED8")
+                .encode(
+                    x=alt.X("date:T", title="Date"),
+                    y=alt.Y("cum_cash_before:Q", title="Forecasted Cashflow (€)"),
+                    tooltip=[
+                        alt.Tooltip("date:T", title="Date"),
+                        alt.Tooltip("cum_cash_before:Q", title="Forecasted Cash (€)", format=",.2f"),
+                    ],
+                )
+                .properties(height=340)
+            )
+            st.altair_chart(chart_cf, use_container_width=True)
+
+            st.markdown(f"**📊 Cumulative Profit Trajectory ({horizon_days} Days — {revenue_scenario})**")
+            chart_profit = (
+                alt.Chart(proj_df)
+                .mark_line(strokeWidth=3, color="#0F172A")
+                .encode(
+                    x=alt.X("date:T", title="Date"),
+                    y=alt.Y("cum_profit_before:Q", title="Cumulative Profit (€)"),
+                    tooltip=[
+                        alt.Tooltip("date:T", title="Date"),
+                        alt.Tooltip("cum_profit_before:Q", title="Cumulative Profit (€)", format=",.2f"),
+                    ],
+                )
+                .properties(height=340)
+            )
+            st.altair_chart(chart_profit, use_container_width=True)
+
+        st.divider()
+
+        # --- AREA 3: ACTIONABLE RECOMMENDATIONS ---
+        st.subheader("🧭 3. Liquidity & Working Capital Recommendations")
+        st.caption("☑️ Toggle actions below to compare Before vs. After cash balance and profit above.")
+
+        with st.container(border=True):
+            st.checkbox(
+                "📦 **Action 1 — Supplier Payment Terms (DPO):** Extend supplier DPO to 20 days from 10/12/2026 to ease near-term cash outflows.",
+                key="rec_dpo_20",
+            )
+
+        with st.container(border=True):
+            st.checkbox(
+                "💼 **Action 2 — Monthly Payroll Timing:** Align monthly payroll timing on the 15th (within policy rules, adjusted for French holidays).",
+                key="rec_payroll_15th",
+            )
+
+        with st.container(border=True):
+            st.checkbox(
+                f"🛟 **Action 3 — Short-Term Liquidity Bridge:** Draw €{STORE_RULES['recommended_loan_amount']:,.0f} on 01/12/2026 and model {STORE_RULES['recommended_loan_term_days']}-day repayment + {STORE_RULES['recommended_loan_interest_pct']}% interest.",
+                key="rec_loan_1000",
+            )
+
+        st.divider()
+
+        # --- AREA 4: 5 NON-RECURRING EVENT LINES ---
+        st.subheader("⚡ 4. Non-Recurring Events Simulator (Up to 5 Events)")
+        st.caption(f"📅 Start dates cannot be earlier than today (**{TODAY.strftime('%Y-%m-%d')}**).")
+
+        active_events: list[dict] = []
+        for i in range(1, 6):
+            with st.expander(f"🌊 Non-Recurring Event #{i}", expanded=(i == 1)):
+                c_desc, c_tx, c_inv, c_dmg, c_start, c_end = st.columns([2.2, 1.3, 1.5, 1.1, 1.3, 1.3])
+                ev_desc = c_desc.text_input(
+                    "📝 Event Description",
+                    key=f"ev_desc_{i}",
+                    placeholder="e.g., Local transport protest" if i == 1 else ("e.g., Banana supplier shortage" if i == 2 else ""),
+                )
+                ev_tx = c_tx.selectbox(
+                    "📂 Affected Transaction",
+                    options=["revenue", "inventories", "tax"],
+                    key=f"ev_tx_{i}",
+                )
+                ev_inv = c_inv.selectbox(
+                    "📦 Affected Inventory",
+                    options=INVENTORY_OPTIONS_WITH_ALL,
+                    key=f"ev_inv_{i}",
+                )
+                ev_dmg = c_dmg.number_input(
+                    "📉 Damage / Impact (%)",
+                    min_value=0.0,
+                    max_value=100.0,
+                    value=0.0,
+                    step=5.0,
+                    key=f"ev_dmg_{i}",
+                )
+                ev_start = c_start.date_input(
+                    "📅 Start Date",
+                    value=TODAY.date(),
+                    min_value=TODAY.date(),
+                    key=f"ev_start_{i}",
+                )
+                ev_end = c_end.date_input(
+                    "🏁 End Date",
+                    value=(TODAY + timedelta(days=7)).date(),
+                    min_value=ev_start,
+                    key=f"ev_end_{i}",
+                )
+
+                if ev_desc.strip() and ev_dmg > 0:
+                    active_events.append({
+                        "description": ev_desc.strip(),
+                        "affected_tx": ev_tx,
+                        "affected_inventory": ev_inv,
+                        "damage_pct": ev_dmg,
+                        "start_date": ev_start,
+                        "end_date": ev_end,
+                    })
+
+        st.divider()
+
+        # --- AREA 5: EVENT IMPACT SUMMARY BOX ---
+        st.subheader("📋 5. Non-Recurring Events Impact Summary")
+        impact_summary = evaluate_non_recurring_events(active_events)
+        s1, s2, s3 = st.columns(3)
+        s1.metric("📉 Estimated Revenue Impact", f"€{impact_summary['total_revenue_delta']:,.2f}")
+        s2.metric("📦 Estimated Inventory/Cost Delta", f"€{impact_summary['total_cost_delta']:,.2f}")
+        s3.metric("🌊 Estimated Net Cashflow Impact", f"€{impact_summary['total_cashflow_delta']:,.2f}")
+
+        if impact_summary["summaries"]:
+            for line in impact_summary["summaries"]:
+                st.write(f"🌊 {line}")
+        else:
+            st.info("ℹ️ No active non-recurring events entered yet. Add details in Section 4 above to see calculated impacts.")
+
+    with tab_ledger_audit:
+        st.subheader("📜 Recent Ledger Entries")
+        st.dataframe(df.tail(15), use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        st.subheader("🔐 Ledger Integrity & SHA-256 Hash Chain")
+        if audit_stats["is_clean"]:
+            st.success(f"✅ Ledger chain verified: {len(audited_df)} entries checked, 0 tampered rows, 0 duplicates.")
+        else:
+            st.warning(
+                f"⚠️ Audit alert: **{audit_stats['tampered_count']}** tampered hash(es) and "
+                f"**{audit_stats['duplicate_count']}** duplicate entry/entries detected."
+            )
+
+        with st.expander("🔍 Inspect SHA-256 Hash Chain & Flagged Entries"):
+            if audited_df.empty:
+                st.info("No ledger records available to inspect.")
+            else:
+                show_cols = [
+                    c for c in [
+                        "tx_id", "date", "description", "category", "tx_type",
+                        "inventory_type", "amount", "payment_method", "status",
+                        "entry_hash", "computed_hash", "audit_status",
+                    ]
+                    if c in audited_df.columns
+                ]
+                display_audit = audited_df[show_cols].copy()
+                if "date" in display_audit.columns:
+                    display_audit["date"] = pd.to_datetime(display_audit["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+                st.dataframe(display_audit, use_container_width=True, hide_index=True)
+
+        csv_bytes = st.session_state.ledger_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="📥 Download Updated CSV Ledger",
+            data=csv_bytes,
+            file_name="convenience_store_2025_2026.csv",
+            mime="text/csv",
+        )
