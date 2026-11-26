@@ -415,25 +415,20 @@ elif role == "accountant":
 else:
     kpis = compute_financial_kpis(df)
     thresh_rec = recommend_cashflow_threshold(df)
+    opening_cash_actual = float(kpis["total_cash_and_bank"])
 
-    # --- AREA 1: FINANCIAL POSITION, RECEIVABLES/PAYABLES & SHORTAGE ALERT ---
-    st.subheader("⚓ 1. Financial Position, Receivables/Payables & Shortage Alert")
+    # --- AREA 1: FINANCIAL POSITION & SHORTAGE ALERT ---
+    st.subheader("⚓ 1. Financial Position & Shortage Alert")
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("📈 Profit & Loss (Actuals)", f"€{kpis['profit_and_loss']:,.2f}")
-    m2.metric("🌊 Available Cash + Bank", f"€{kpis['total_cash_and_bank']:,.2f}")
-    m3.metric("📥 Planned Receivables", f"€{kpis['receivables_due']:,.2f}")
-    m4.metric("📤 Planned Payables", f"€{kpis['payables_due']:,.2f}")
+    m2.metric("🌊 Available Cash + Bank", f"€{opening_cash_actual:,.2f}")
+    m3.metric("🛟 Overdraft + ST Borrowings", f"€{kpis['total_debt_and_overdraft']:,.2f}")
+    m4.metric("📊 Suggested Threshold", f"€{thresh_rec['recommended_threshold']:,.2f}")
 
-    c_thr, c_open = st.columns(2)
-    alert_threshold = c_thr.number_input(
+    alert_threshold = st.number_input(
         "🚨 Minimum Cash Alert Threshold (€)",
         min_value=0.0,
         value=float(thresh_rec["recommended_threshold"]),
-        step=250.0,
-    )
-    opening_cash_override = c_open.number_input(
-        "💵 Opening Cash Balance for Forecast (€)",
-        value=float(kpis["total_cash_and_bank"]),
         step=250.0,
     )
 
@@ -480,7 +475,7 @@ else:
         df=df,
         horizon_days=int(horizon_days),
         scenario=revenue_scenario,
-        opening_cash=float(opening_cash_override),
+        opening_cash=opening_cash_actual,
         apply_dpo_20=apply_dpo_20,
         apply_payroll_15th=apply_payroll_15th,
         apply_loan_1000=apply_loan_1000,
@@ -539,7 +534,6 @@ else:
             "cum_profit_after": "After Changes",
         })
 
-        # High-contrast complementary color pairs (Deep Navy Blue vs. Vivid Coral Orange; Slate Navy vs. Crimson Red)
         cf_color_scale = alt.Scale(
             domain=["Before Changes", "After Changes"],
             range=["#1D4ED8", "#F97316"],
