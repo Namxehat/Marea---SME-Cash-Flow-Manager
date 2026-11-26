@@ -19,6 +19,7 @@ from finance_engine import (
     load_store_ledger,
     recommend_cashflow_threshold,
     save_store_ledger,
+    summarize_shortage_alerts,
 )
 
 st.set_page_config(
@@ -141,6 +142,54 @@ def next_tx_id(df: pd.DataFrame) -> str:
     return f"TX-{nxt:04d}"
 
 
+def _parse_uploaded_ledger(uploaded_file) -> pd.DataFrame:
+    name = uploaded_file.name.lower()
+    if name.endswith(".xlsx") or name.endswith(".xls"):
+        raw = pd.read_excel(uploaded_file)
+    else:
+        raw = pd.read_csv(uploaded_file)
+
+    normalized = pd.DataFrame()
+    col_map = {c.strip().lower(): c for c in raw.columns}
+
+    def _pick(candidates: list[str], default=None):
+        for cand in candidates:
+            if cand in col_map:
+                return raw[col_map[cand]]
+        return default
+
+    date_s = _pick(["date", "tx_date", "due_date"])
+    amt_s = _pick(["amount", "value", "cashflow"])
+    type_s = _pick(["tx_type", "type", "flow_type"])
+    status_s = _pick(["status", "state"])
+    desc_s = _pick(["description", "desc", "label", "notes"])
+    cat_s = _pick(["category", "cat"])
+
+    n_rows = len(raw)
+    normalized["tx_id"] = [f"IMP-{i+1:04d}" for i in range(n_rows)]
+    normalized["date"] = pd.to_datetime(date_s, errors="coerce") if date_s is not None else pd.Timestamp(TODAY)
+    normalized["date"] = normalized["date"].fillna(pd.Timestamp(TODAY))
+    normalized["description"] = desc_s.astype(str) if desc_s is not None else "Imported Entry"
+    normalized["category"] = cat_s.astype(str) if cat_s is not None else "Imported Flow"
+
+    raw_amt = pd.to_numeric(amt_s, errors="coerce").fillna(0.0) if amt_s is not None else pd.Series([0.0] * n_rows)
+    if type_s is not None:
+        normalized["tx_type"] = type_s.astype(str).str.strip().str.lower()
+    else:
+        normalized["tx_type"] = ["revenue" if v >= 0 else "expense" for v in raw_amt]
+
+    normalized["inventory_type"] = "None"
+    normalized["amount"] = raw_amt
+    normalized["status"] = status_s.astype(str).str.strip().str.lower() if status_s is not None else "planned"
+    normalized["payment_method"] = "bank"
+    normalized["quantity"] = 0.0
+    normalized["unit_price"] = 0.0
+    normalized["payment_term_days"] = 0
+    normalized["expected_delay_days"] = 0
+    normalized["entry_hash"] = ""
+    return normalized
+
+
 # --- LOGIN GATE ---
 if st.session_state.auth_user is None:
     st.title("🌊 Maréa — Convenience Store Cash Flow Manager")
@@ -167,7 +216,6 @@ current_user = st.session_state.auth_user
 user_meta = USERS[current_user]
 role = user_meta["role"]
 
-# Top header & logout
 col_title, col_logout = st.columns([5, 1])
 with col_title:
     st.title("🌊 Maréa — SME Cash Flow & Ledger")
@@ -189,7 +237,7 @@ df = st.session_state.ledger_df
 # ==============================================================================
 if role == "employee":
     st.subheader("🐚 Employee Transaction Entry (Sales & Inventory Receipts)")
-    st.info("🌊 You can record **revenue** (client sales) or **inventory** receipts. Entries are validated and saved directly to the CSV ledger.")
+    st.info("🌊 Record **revenue** (sales) or **inventory** receipts. Entries are validated and saved to the ledger.")
 
     tx_type = st.selectbox("📦 Type of Transaction", options=["revenue", "inventory"])
 
@@ -257,8 +305,8 @@ if role == "employee":
                         "entry_hash": "",
                     }])
                     updated = pd.concat([df, new_row], ignore_index=True)
-                    st.session_state.ledger_df = save_store_ledger(updated, str(CSV_PATH))
-                    st.success(f"✅ Saved {tx_type} entry (€{abs(signed_amt):,.2f}) to `{CSV_PATH.name}`.")
+                    st.session_state.ledger_df = save_store_ledger(updated, str(CSV_PATH) if CSV_PATH.exists() else None)
+                    st.success(f"✅ Saved {tx_type} entry (€{abs(signed_amt):,.2f}).")
                     st.rerun()
 
 
@@ -266,11 +314,11 @@ if role == "employee":
 # ROLE 2: NOELLE (ACCOUNTANT)
 # ==============================================================================
 elif role == "accountant":
-    st.subheader("🧭 Accountant Ledger Entry & Policy Controls")
+    st.subheader("🧭 Accountant Ledger Entry, Import & Policy Controls")
     st.caption(
         f"🏦 Payment Channel: **bank** | ⏳ Max supplier payment term = **{STORE_RULES['max_supplier_payment_days']} days** "
         f"(default {STORE_RULES['default_dpo_days']} days) | 💼 Payroll normally on the **{STORE_RULES['normal_payroll_day']}th** "
-        f"(latest **{STORE_RULES['latest_payroll_day']}th** of following month, adjusted for French holidays) | "
+        f"(latest **{STORE_RULES['latest_payroll_day']}th**, adjusted for French holidays) | "
         f"🌊 Max overdraft = **€{STORE_RULES['max_bank_overdraft']:,.0f}** | 🛟 Max short-term borrowing = **€{STORE_RULES['max_short_term_borrowing']:,.0f}**."
     )
 
@@ -302,7 +350,7 @@ elif role == "accountant":
             status_val = c8.selectbox("📌 Status", options=["actual", "planned"])
 
             desc = st.text_input("📝 Accounting Description / Reference", placeholder="e.g., November Supplier Settlement or Tax Filing")
-            submitted = st.form_submit_button("💾 Record & Save to CSV")
+            submitted = st.form_submit_button("💾 Record & Save Ledger")
 
             if submitted:
                 errors = []
@@ -344,44 +392,60 @@ elif role == "accountant":
                         "entry_hash": "",
                     }])
                     updated = pd.concat([df, new_row], ignore_index=True)
-                    st.session_state.ledger_df = save_store_ledger(updated, str(CSV_PATH))
-                    st.success(f"✅ Recorded entry and saved to `{CSV_PATH.name}`.")
+                    st.session_state.ledger_df = save_store_ledger(updated, str(CSV_PATH) if CSV_PATH.exists() else None)
+                    st.success("✅ Recorded entry and recomputed SHA-256 hash chain.")
                     st.rerun()
+
+    st.markdown("#### 📥 Import CSV or Excel Transactions")
+    uploaded_file = st.file_uploader("Upload CSV or Excel (.xlsx/.xls) file", type=["csv", "xlsx", "xls"])
+    if uploaded_file is not None and st.button("➕ Append Uploaded Rows to Ledger"):
+        imp_df = _parse_uploaded_ledger(uploaded_file)
+        merged = pd.concat([df, imp_df], ignore_index=True)
+        st.session_state.ledger_df = save_store_ledger(merged, str(CSV_PATH) if CSV_PATH.exists() else None)
+        st.success(f"✅ Appended {len(imp_df)} rows from `{uploaded_file.name}`.")
+        st.rerun()
 
     st.markdown("#### 📜 Recent Ledger Entries")
     st.dataframe(df.tail(15), use_container_width=True, hide_index=True)
 
 
 # ==============================================================================
-# ROLE 3: RANIA (OWNER) — OCEAN THEME + COMBINED FORECASTS + RECOMMENDATIONS
+# ROLE 3: RANIA (OWNER) — OVERVIEW, ALERTS, FORECAST, ACTIONS & INTEGRITY
 # ==============================================================================
 else:
     kpis = compute_financial_kpis(df)
     thresh_rec = recommend_cashflow_threshold(df)
 
-    # --- AREA 1: P&L, TOTAL CASH + BANK, OVERDRAFT + BORROWINGS ---
-    st.subheader("⚓ 1. Financial Position & Cash Overview")
+    # --- AREA 1: FINANCIAL POSITION, RECEIVABLES/PAYABLES & SHORTAGE ALERT ---
+    st.subheader("⚓ 1. Financial Position, Receivables/Payables & Shortage Alert")
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("📈 Profit & Loss (Actuals)", f"€{kpis['profit_and_loss']:,.2f}")
-    m2.metric("🌊 Total Cash + Cash in Bank", f"€{kpis['total_cash_and_bank']:,.2f}")
-    m3.metric("🛟 Overdraft + Short-Term Borrowings", f"€{kpis['total_debt_and_overdraft']:,.2f}")
-    m4.metric("🚨 Recommended Alert Threshold", f"€{thresh_rec['recommended_threshold']:,.2f}")
+    m2.metric("🌊 Available Cash + Bank", f"€{kpis['total_cash_and_bank']:,.2f}")
+    m3.metric("📥 Planned Receivables", f"€{kpis['receivables_due']:,.2f}")
+    m4.metric("📤 Planned Payables", f"€{kpis['payables_due']:,.2f}")
+
+    c_thr, c_open = st.columns(2)
+    alert_threshold = c_thr.number_input(
+        "🚨 Minimum Cash Alert Threshold (€)",
+        min_value=0.0,
+        value=float(thresh_rec["recommended_threshold"]),
+        step=250.0,
+    )
+    opening_cash_override = c_open.number_input(
+        "💵 Opening Cash Balance for Forecast (€)",
+        value=float(kpis["total_cash_and_bank"]),
+        step=250.0,
+    )
 
     st.caption(
         f"💵 Cash on hand: €{kpis['cash_balance']:,.2f} | 🏦 Bank balance: €{kpis['bank_balance']:,.2f} | "
-        f"🌊 Overdraft used: €{kpis['overdraft_used']:,.2f} (Limit €{STORE_RULES['max_bank_overdraft']:,.0f}) | "
-        f"🛟 Short-term borrowings: €{kpis['short_term_borrowings']:,.2f} (Limit €{STORE_RULES['max_short_term_borrowing']:,.0f})"
+        f"🛟 Overdraft + ST Borrowings: €{kpis['total_debt_and_overdraft']:,.2f} | "
+        f"📊 Suggested threshold: €{thresh_rec['recommended_threshold']:,.2f}"
     )
 
     st.divider()
 
-    # --- AREA 2: FORECASTED CASHFLOW (1 CHART, 2 LINES) & PROFIT TRAJECTORY (BELOW) ---
-    st.subheader("🌊 2. Forecasted Cashflow & Cumulative Profit Trajectory (Before vs. After Changes)")
-    ctrl1, ctrl2 = st.columns([1, 2])
-    horizon_days = ctrl1.selectbox("⏳ Forecast Window (Days)", options=[30, 60, 90], index=0)
-    revenue_scenario = ctrl2.selectbox("🌤️ Revenue Scenario", options=list(REVENUE_SCENARIOS.keys()), index=1)
-    st.caption(f"ℹ️ {REVENUE_SCENARIOS[revenue_scenario]['description']}")
-
+    # --- AREA 2: FORECASTED CASHFLOW & PROFIT TRAJECTORY ---
     apply_dpo_20 = bool(st.session_state.get("rec_dpo_20", False))
     apply_payroll_15th = bool(st.session_state.get("rec_payroll_15th", False))
     apply_loan_1000 = bool(st.session_state.get("rec_loan_1000", False))
@@ -400,106 +464,190 @@ else:
                 "end_date": st.session_state.get(f"ev_end_{i}", (TODAY + timedelta(days=7)).date()),
             })
 
+    has_changes = any([apply_dpo_20, apply_payroll_15th, apply_loan_1000]) or len(current_events) > 0
+
+    if has_changes:
+        st.subheader("🌊 2. Forecasted Cashflow & Cumulative Profit Trajectory (Before vs. After Changes)")
+    else:
+        st.subheader("🌊 2. Forecasted Cashflow & Cumulative Profit Trajectory")
+
+    ctrl1, ctrl2 = st.columns([1, 2])
+    horizon_days = ctrl1.selectbox("⏳ Forecast Window (Days)", options=[30, 60, 90], index=0)
+    revenue_scenario = ctrl2.selectbox("🌤️ Revenue Scenario", options=list(REVENUE_SCENARIOS.keys()), index=1)
+    st.caption(f"ℹ️ {REVENUE_SCENARIOS[revenue_scenario]['description']}")
+
     proj_df = build_owner_forecast(
         df=df,
         horizon_days=int(horizon_days),
         scenario=revenue_scenario,
+        opening_cash=float(opening_cash_override),
         apply_dpo_20=apply_dpo_20,
         apply_payroll_15th=apply_payroll_15th,
         apply_loan_1000=apply_loan_1000,
         events=current_events,
     )
 
-    cf_combined_df = proj_df.melt(
-        id_vars=["date"],
-        value_vars=["cum_cash_before", "cum_cash_after"],
-        var_name="Series",
-        value_name="Forecasted Cashflow (€)",
-    )
-    cf_combined_df["Series"] = cf_combined_df["Series"].map({
-        "cum_cash_before": "Before Changes",
-        "cum_cash_after": "After Changes",
-    })
+    alert_before = summarize_shortage_alerts(proj_df, threshold=float(alert_threshold), col="cum_cash_before")
+    alert_after = summarize_shortage_alerts(proj_df, threshold=float(alert_threshold), col="cum_cash_after")
 
-    profit_combined_df = proj_df.melt(
-        id_vars=["date"],
-        value_vars=["cum_profit_before", "cum_profit_after"],
-        var_name="Series",
-        value_name="Cumulative Profit (€)",
-    )
-    profit_combined_df["Series"] = profit_combined_df["Series"].map({
-        "cum_profit_before": "Before Changes",
-        "cum_profit_after": "After Changes",
-    })
+    alert_prefix = "**Before Changes Alert:**" if has_changes else "**Shortage Alert:**"
+    ok_prefix = "**Before Changes:**" if has_changes else "**Liquidity Status:**"
 
-    cf_color_scale = alt.Scale(
-        domain=["Before Changes", "After Changes"],
-        range=["#0284C7", "#14B8A6"],
-    )
-    profit_color_scale = alt.Scale(
-        domain=["Before Changes", "After Changes"],
-        range=["#0F4C75", "#F59E0B"],
-    )
-
-    # Chart 1: Single chart with 2 lines (Before vs. After Changes)
-    st.markdown(f"**💧 Forecasted Cashflow — Before vs. After Changes ({horizon_days} Days — {revenue_scenario})**")
-    chart_cf = (
-        alt.Chart(cf_combined_df)
-        .mark_line(strokeWidth=3)
-        .encode(
-            x=alt.X("date:T", title="Date"),
-            y=alt.Y("Forecasted Cashflow (€):Q", title="Forecasted Cashflow (€)"),
-            color=alt.Color("Series:N", scale=cf_color_scale, title="Scenario Stage"),
-            tooltip=[
-                alt.Tooltip("date:T", title="Date"),
-                alt.Tooltip("Series:N", title="Stage"),
-                alt.Tooltip("Forecasted Cashflow (€):Q", title="Cashflow (€)", format=",.2f"),
-            ],
+    if alert_before["has_shortage"]:
+        st.warning(
+            f"⚠️ {alert_prefix} Cash falls below **€{alert_threshold:,.2f}** starting **{alert_before['first_alert_date']}** "
+            f"(lowest projected balance: **€{alert_before['lowest_balance']:,.2f}** on **{alert_before['lowest_date']}**, "
+            f"{alert_before['alert_days_count']} day(s) below threshold). "
+            f"Causes: {' '.join(alert_before['causes'])}"
         )
-        .properties(height=340)
-    )
-    st.altair_chart(chart_cf, use_container_width=True)
-
-    # Chart 2: Cumulative Profit Trajectory placed underneath in the same format
-    st.markdown(f"**📊 Cumulative Profit Trajectory — Before vs. After Changes ({horizon_days} Days — {revenue_scenario})**")
-    chart_profit = (
-        alt.Chart(profit_combined_df)
-        .mark_line(strokeWidth=3)
-        .encode(
-            x=alt.X("date:T", title="Date"),
-            y=alt.Y("Cumulative Profit (€):Q", title="Cumulative Profit (€)"),
-            color=alt.Color("Series:N", scale=profit_color_scale, title="Scenario Stage"),
-            tooltip=[
-                alt.Tooltip("date:T", title="Date"),
-                alt.Tooltip("Series:N", title="Stage"),
-                alt.Tooltip("Cumulative Profit (€):Q", title="Profit (€)", format=",.2f"),
-            ],
+    else:
+        st.success(
+            f"✅ {ok_prefix} Projected cash stays at or above **€{alert_threshold:,.2f}** over {horizon_days} days "
+            f"(lowest balance: **€{alert_before['lowest_balance']:,.2f}** on **{alert_before['lowest_date']}**)."
         )
-        .properties(height=340)
-    )
-    st.altair_chart(chart_profit, use_container_width=True)
+
+    if has_changes:
+        after_status = (
+            "no threshold breach"
+            if not alert_after["has_shortage"]
+            else f"first alert {alert_after['first_alert_date']}, {alert_after['alert_days_count']} day(s) below threshold"
+        )
+        st.info(
+            f"🔄 **After Changes Comparison:** Lowest balance moves from **€{alert_before['lowest_balance']:,.2f}** "
+            f"to **€{alert_after['lowest_balance']:,.2f}** ({after_status})."
+        )
+
+        cf_combined_df = proj_df.melt(
+            id_vars=["date"],
+            value_vars=["cum_cash_before", "cum_cash_after"],
+            var_name="Series",
+            value_name="Forecasted Cashflow (€)",
+        )
+        cf_combined_df["Series"] = cf_combined_df["Series"].map({
+            "cum_cash_before": "Before Changes",
+            "cum_cash_after": "After Changes",
+        })
+
+        profit_combined_df = proj_df.melt(
+            id_vars=["date"],
+            value_vars=["cum_profit_before", "cum_profit_after"],
+            var_name="Series",
+            value_name="Cumulative Profit (€)",
+        )
+        profit_combined_df["Series"] = profit_combined_df["Series"].map({
+            "cum_profit_before": "Before Changes",
+            "cum_profit_after": "After Changes",
+        })
+
+        # High-contrast complementary color pairs (Deep Navy Blue vs. Vivid Coral Orange; Slate Navy vs. Crimson Red)
+        cf_color_scale = alt.Scale(
+            domain=["Before Changes", "After Changes"],
+            range=["#1D4ED8", "#F97316"],
+        )
+        profit_color_scale = alt.Scale(
+            domain=["Before Changes", "After Changes"],
+            range=["#0F172A", "#E11D48"],
+        )
+
+        st.markdown(f"**💧 Forecasted Cashflow — Before vs. After Changes ({horizon_days} Days — {revenue_scenario})**")
+        chart_cf = (
+            alt.Chart(cf_combined_df)
+            .mark_line(strokeWidth=3)
+            .encode(
+                x=alt.X("date:T", title="Date"),
+                y=alt.Y("Forecasted Cashflow (€):Q", title="Forecasted Cashflow (€)"),
+                color=alt.Color("Series:N", scale=cf_color_scale, title="Scenario Stage"),
+                strokeDash=alt.StrokeDash(
+                    "Series:N",
+                    scale=alt.Scale(domain=["Before Changes", "After Changes"], range=[[6, 4], [1, 0]]),
+                    legend=None,
+                ),
+                tooltip=[
+                    alt.Tooltip("date:T", title="Date"),
+                    alt.Tooltip("Series:N", title="Stage"),
+                    alt.Tooltip("Forecasted Cashflow (€):Q", title="Cash (€)", format=",.2f"),
+                ],
+            )
+            .properties(height=340)
+        )
+        st.altair_chart(chart_cf, use_container_width=True)
+
+        st.markdown(f"**📊 Cumulative Profit Trajectory — Before vs. After Changes ({horizon_days} Days — {revenue_scenario})**")
+        chart_profit = (
+            alt.Chart(profit_combined_df)
+            .mark_line(strokeWidth=3)
+            .encode(
+                x=alt.X("date:T", title="Date"),
+                y=alt.Y("Cumulative Profit (€):Q", title="Cumulative Profit (€)"),
+                color=alt.Color("Series:N", scale=profit_color_scale, title="Scenario Stage"),
+                strokeDash=alt.StrokeDash(
+                    "Series:N",
+                    scale=alt.Scale(domain=["Before Changes", "After Changes"], range=[[6, 4], [1, 0]]),
+                    legend=None,
+                ),
+                tooltip=[
+                    alt.Tooltip("date:T", title="Date"),
+                    alt.Tooltip("Series:N", title="Stage"),
+                    alt.Tooltip("Cumulative Profit (€):Q", title="Profit (€)", format=",.2f"),
+                ],
+            )
+            .properties(height=340)
+        )
+        st.altair_chart(chart_profit, use_container_width=True)
+    else:
+        st.markdown(f"**💧 Forecasted Cashflow ({horizon_days} Days — {revenue_scenario})**")
+        chart_cf = (
+            alt.Chart(proj_df)
+            .mark_line(strokeWidth=3, color="#1D4ED8")
+            .encode(
+                x=alt.X("date:T", title="Date"),
+                y=alt.Y("cum_cash_before:Q", title="Forecasted Cashflow (€)"),
+                tooltip=[
+                    alt.Tooltip("date:T", title="Date"),
+                    alt.Tooltip("cum_cash_before:Q", title="Forecasted Cash (€)", format=",.2f"),
+                ],
+            )
+            .properties(height=340)
+        )
+        st.altair_chart(chart_cf, use_container_width=True)
+
+        st.markdown(f"**📊 Cumulative Profit Trajectory ({horizon_days} Days — {revenue_scenario})**")
+        chart_profit = (
+            alt.Chart(proj_df)
+            .mark_line(strokeWidth=3, color="#0F172A")
+            .encode(
+                x=alt.X("date:T", title="Date"),
+                y=alt.Y("cum_profit_before:Q", title="Cumulative Profit (€)"),
+                tooltip=[
+                    alt.Tooltip("date:T", title="Date"),
+                    alt.Tooltip("cum_profit_before:Q", title="Cumulative Profit (€)", format=",.2f"),
+                ],
+            )
+            .properties(height=340)
+        )
+        st.altair_chart(chart_profit, use_container_width=True)
 
     st.divider()
 
-    # --- AREA 3: ACTIONABLE RECOMMENDATIONS WITH FULL TEXT & DECISION CHECKBOXES ---
+    # --- AREA 3: ACTIONABLE RECOMMENDATIONS ---
     st.subheader("🧭 3. Liquidity & Working Capital Recommendations")
-    st.caption("☑️ Select any recommendation below to update the After Changes forecast lines above.")
+    st.caption("☑️ Toggle actions below to compare Before vs. After cash balance and profit above.")
 
     with st.container(border=True):
         st.checkbox(
-            "📦 **Recommendation 1 — Supplier Payment Terms (DPO):** Extend supplier Days Payable Outstanding (DPO) to 20 days starting 10/12/2026 (currently 10 days, which tightens near-term liquidity).",
+            "📦 **Action 1 — Supplier Payment Terms (DPO):** Extend supplier DPO to 20 days from 10/12/2026 to ease near-term cash outflows.",
             key="rec_dpo_20",
         )
 
     with st.container(border=True):
         st.checkbox(
-            "💼 **Recommendation 2 — Monthly Payroll Timing:** Schedule monthly employee payroll on the 15th of the following month (within the statutory/policy window, adjusted for French holidays).",
+            "💼 **Action 2 — Monthly Payroll Timing:** Align monthly payroll timing on the 15th (within policy rules, adjusted for French holidays).",
             key="rec_payroll_15th",
         )
 
     with st.container(border=True):
         st.checkbox(
-            "🛟 **Recommendation 3 — Short-Term Liquidity Bridge:** Arrange a 60-day short-term credit facility of €1,000 prior to 20/12/2026 to reinforce cash buffer during peak outflows.",
+            f"🛟 **Action 3 — Short-Term Liquidity Bridge:** Draw €{STORE_RULES['recommended_loan_amount']:,.0f} on 01/12/2026 and model {STORE_RULES['recommended_loan_term_days']}-day repayment + {STORE_RULES['recommended_loan_interest_pct']}% interest.",
             key="rec_loan_1000",
         )
 
