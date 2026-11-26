@@ -290,7 +290,7 @@ elif role == "accountant":
 
 
 # ==============================================================================
-# ROLE 3: RANIA (OWNER) — REORDERED LAYOUT WITH FULL-WIDTH SEPARATE CHARTS
+# ROLE 3: RANIA (OWNER) — COMBINED CASHFLOW CHART + PROFIT TRAJECTORY CHART
 # ==============================================================================
 else:
     kpis = compute_financial_kpis(df)
@@ -312,14 +312,13 @@ else:
 
     st.divider()
 
-    # --- AREA 2 (MOVED UP): CASHFLOW FORECAST — BEFORE VS. AFTER CHANGES ---
-    st.subheader("2. Forecasted Cashflow (Before vs. After Changes)")
+    # --- AREA 2: FORECASTED CASHFLOW (1 CHART, 2 LINES) & PROFIT TRAJECTORY (BELOW) ---
+    st.subheader("2. Forecasted Cashflow & Cumulative Profit Trajectory (Before vs. After Changes)")
     ctrl1, ctrl2 = st.columns([1, 2])
     horizon_days = ctrl1.selectbox("Forecast Window (Days)", options=[30, 60, 90], index=0)
     revenue_scenario = ctrl2.selectbox("Revenue Scenario", options=list(REVENUE_SCENARIOS.keys()), index=1)
     st.caption(REVENUE_SCENARIOS[revenue_scenario]["description"])
 
-    # Read current selections from Recommendations & Non-Recurring Events if already in session_state
     apply_dpo_20 = bool(st.session_state.get("rec_dpo_20", False))
     apply_payroll_15th = bool(st.session_state.get("rec_payroll_15th", False))
     apply_loan_1000 = bool(st.session_state.get("rec_loan_1000", False))
@@ -348,56 +347,80 @@ else:
         events=current_events,
     )
 
-    before_cf_df = pd.DataFrame({
-        "date": proj_df["date"],
-        "Forecasted Cashflow (€)": proj_df["cum_cash_before"],
-        "Stage": "Before Changes",
-    })
-    after_cf_df = pd.DataFrame({
-        "date": proj_df["date"],
-        "Forecasted Cashflow (€)": proj_df["cum_cash_after"],
-        "Stage": "After Changes",
+    cf_combined_df = proj_df.melt(
+        id_vars=["date"],
+        value_vars=["cum_cash_before", "cum_cash_after"],
+        var_name="Series",
+        value_name="Forecasted Cashflow (€)",
+    )
+    cf_combined_df["Series"] = cf_combined_df["Series"].map({
+        "cum_cash_before": "Before Changes",
+        "cum_cash_after": "After Changes",
     })
 
-    # Chart 1 (Full Width, Distinct Teal Palette)
-    st.markdown(f"**Forecasted Cashflow — Before Changes ({horizon_days} Days — {revenue_scenario})**")
-    chart_before = (
-        alt.Chart(before_cf_df)
-        .mark_line(strokeWidth=3, color="#0D9488")
+    profit_combined_df = proj_df.melt(
+        id_vars=["date"],
+        value_vars=["cum_profit_before", "cum_profit_after"],
+        var_name="Series",
+        value_name="Cumulative Profit (€)",
+    )
+    profit_combined_df["Series"] = profit_combined_df["Series"].map({
+        "cum_profit_before": "Before Changes",
+        "cum_profit_after": "After Changes",
+    })
+
+    cf_color_scale = alt.Scale(
+        domain=["Before Changes", "After Changes"],
+        range=["#0D9488", "#EA580C"],
+    )
+    profit_color_scale = alt.Scale(
+        domain=["Before Changes", "After Changes"],
+        range=["#2563EB", "#D97706"],
+    )
+
+    # Chart 1: Single chart with 2 lines (Before vs. After Changes)
+    st.markdown(f"**Forecasted Cashflow — Before vs. After Changes ({horizon_days} Days — {revenue_scenario})**")
+    chart_cf = (
+        alt.Chart(cf_combined_df)
+        .mark_line(strokeWidth=3)
         .encode(
             x=alt.X("date:T", title="Date"),
             y=alt.Y("Forecasted Cashflow (€):Q", title="Forecasted Cashflow (€)"),
+            color=alt.Color("Series:N", scale=cf_color_scale, title="Scenario Stage"),
             tooltip=[
                 alt.Tooltip("date:T", title="Date"),
-                alt.Tooltip("Forecasted Cashflow (€):Q", title="Before Changes (€)", format=",.2f"),
+                alt.Tooltip("Series:N", title="Stage"),
+                alt.Tooltip("Forecasted Cashflow (€):Q", title="Cashflow (€)", format=",.2f"),
             ],
         )
-        .properties(height=320)
+        .properties(height=340)
     )
-    st.altair_chart(chart_before, use_container_width=True)
+    st.altair_chart(chart_cf, use_container_width=True)
 
-    # Chart 2 (Full Width Below, Distinct Amber/Coral Palette)
-    st.markdown(f"**Forecasted Cashflow — After Changes ({horizon_days} Days — {revenue_scenario})**")
-    chart_after = (
-        alt.Chart(after_cf_df)
-        .mark_line(strokeWidth=3, color="#EA580C")
+    # Chart 2: Cumulative Profit Trajectory placed underneath in the same format
+    st.markdown(f"**Cumulative Profit Trajectory — Before vs. After Changes ({horizon_days} Days — {revenue_scenario})**")
+    chart_profit = (
+        alt.Chart(profit_combined_df)
+        .mark_line(strokeWidth=3)
         .encode(
             x=alt.X("date:T", title="Date"),
-            y=alt.Y("Forecasted Cashflow (€):Q", title="Forecasted Cashflow (€)"),
+            y=alt.Y("Cumulative Profit (€):Q", title="Cumulative Profit (€)"),
+            color=alt.Color("Series:N", scale=profit_color_scale, title="Scenario Stage"),
             tooltip=[
                 alt.Tooltip("date:T", title="Date"),
-                alt.Tooltip("Forecasted Cashflow (€):Q", title="After Changes (€)", format=",.2f"),
+                alt.Tooltip("Series:N", title="Stage"),
+                alt.Tooltip("Cumulative Profit (€):Q", title="Profit (€)", format=",.2f"),
             ],
         )
-        .properties(height=320)
+        .properties(height=340)
     )
-    st.altair_chart(chart_after, use_container_width=True)
+    st.altair_chart(chart_profit, use_container_width=True)
 
     st.divider()
 
     # --- AREA 3: ACTIONABLE RECOMMENDATIONS WITH FULL TEXT & DECISION CHECKBOXES ---
     st.subheader("3. Liquidity & Working Capital Recommendations")
-    st.caption("Select any recommendation below to update the After Changes cashflow chart above.")
+    st.caption("Select any recommendation below to update the After Changes forecast lines above.")
 
     with st.container(border=True):
         st.checkbox(
