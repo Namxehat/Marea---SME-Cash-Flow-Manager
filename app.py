@@ -45,9 +45,10 @@ if "auth_user" not in st.session_state:
 
 def next_tx_id(df: pd.DataFrame) -> str:
     nums = []
-    for val in df["tx_id"].astype(str):
-        if val.startswith("TX-") and val[3:].isdigit():
-            nums.append(int(val[3:]))
+    if not df.empty and "tx_id" in df.columns:
+        for val in df["tx_id"].astype(str):
+            if val.startswith("TX-") and val[3:].isdigit():
+                nums.append(int(val[3:]))
     nxt = (max(nums) + 1) if nums else 1
     return f"TX-{nxt:04d}"
 
@@ -81,7 +82,10 @@ role = user_meta["role"]
 col_title, col_logout = st.columns([5, 1])
 with col_title:
     st.title("🏪 Maréa — SME Cash Flow & Ledger")
-    st.caption(f"Signed in as **{user_meta['label']}** | Reference Date: **{TODAY.strftime('%Y-%m-%d')}** | Staff: **{STORE_RULES['employees_count']}**")
+    st.caption(
+        f"Signed in as **{user_meta['label']}** | Reference Date: **{TODAY.strftime('%Y-%m-%d')}** | "
+        f"Staff: **{STORE_RULES['employees_count']}**"
+    )
 with col_logout:
     st.write("")
     if st.button("Sign Out"):
@@ -107,7 +111,7 @@ if role == "employee":
     qty_val = c_qty.number_input("Number of Inventory (Units)", min_value=0.0, value=10.0, step=1.0)
 
     if tx_type == "revenue":
-        unit_price = c_auto.number_input(
+        c_auto.number_input(
             "Auto-Calculated Total Amount (€)",
             min_value=0.0,
             value=round(qty_val * default_price, 2),
@@ -121,7 +125,6 @@ if role == "employee":
             value="Not applicable for inventory receipt",
             disabled=True,
         )
-        # Estimate inventory cost at ~65% of retail catalog unit price for ledger recording
         computed_total = round(qty_val * default_price * 0.65, 2)
 
     with st.form("employee_tx_form", clear_on_submit=True):
@@ -259,7 +262,7 @@ elif role == "accountant":
 
 
 # ==============================================================================
-# ROLE 3: RANIA (OWNER) — 5 REQUIRED AREAS + REVENUE SCENARIO
+# ROLE 3: RANIA (OWNER) — 5 REQUIRED AREAS + REVENUE SCENARIO + AUDIT CHAIN
 # ==============================================================================
 else:
     kpis = compute_financial_kpis(df)
@@ -441,36 +444,40 @@ else:
     else:
         st.info("No active non-recurring events entered yet. Add details in Section 4 above to see calculated impacts.")
 
+    # --- OWNER-ONLY: LEDGER INTEGRITY (SHA-256 HASH CHAIN) & CSV EXPORT ---
+    st.divider()
+    st.subheader("🔐 Ledger Integrity & SHA-256 Hash Chain")
+    audited_df, audit_stats = audit_ledger_integrity(st.session_state.ledger_df)
 
-# ==============================================================================
-# SHARED FOOTER: LEDGER INTEGRITY (SHA-256 HASH CHAIN) & CSV EXPORT
-# ==============================================================================
-st.divider()
-st.subheader("🔐 Ledger Integrity & SHA-256 Hash Chain")
-audited_df, audit_stats = audit_ledger_integrity(st.session_state.ledger_df)
+    if audit_stats["is_clean"]:
+        st.success(f"Ledger chain verified: {len(audited_df)} entries checked, 0 tampered rows, 0 duplicates.")
+    else:
+        st.warning(
+            f"Audit alert: **{audit_stats['tampered_count']}** tampered hash(es) and "
+            f"**{audit_stats['duplicate_count']}** duplicate entry/entries detected."
+        )
 
-if audit_stats["is_clean"]:
-    st.success(f"Ledger chain verified: {len(audited_df)} entries checked, 0 tampered rows, 0 duplicates.")
-else:
-    st.warning(
-        f"Audit alert: **{audit_stats['tampered_count']}** tampered hash(es) and "
-        f"**{audit_stats['duplicate_count']}** duplicate entry/entries detected."
+    with st.expander("Inspect SHA-256 Hash Chain & Flagged Entries"):
+        if audited_df.empty:
+            st.info("No ledger records available to inspect.")
+        else:
+            show_cols = [
+                c for c in [
+                    "tx_id", "date", "description", "category", "tx_type",
+                    "inventory_type", "amount", "payment_method", "status",
+                    "entry_hash", "computed_hash", "audit_status",
+                ]
+                if c in audited_df.columns
+            ]
+            display_audit = audited_df[show_cols].copy()
+            if "date" in display_audit.columns:
+                display_audit["date"] = pd.to_datetime(display_audit["date"], errors="coerce").dt.strftime("%Y-%m-%d")
+            st.dataframe(display_audit, use_container_width=True, hide_index=True)
+
+    csv_bytes = st.session_state.ledger_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="Download Updated CSV Ledger",
+        data=csv_bytes,
+        file_name="convenience_store_2025_2026.csv",
+        mime="text/csv",
     )
-
-with st.expander("Inspect SHA-256 Hash Chain & Flagged Entries"):
-    show_cols = [
-        "tx_id", "date", "description", "category", "tx_type",
-        "inventory_type", "amount", "payment_method", "status",
-        "entry_hash", "computed_hash", "audit_status",
-    ]
-    display_audit = audited_df[show_cols].copy()
-    display_audit["date"] = display_audit["date"].dt.strftime("%Y-%m-%d")
-    st.dataframe(display_audit, use_container_width=True, hide_index=True)
-
-csv_bytes = st.session_state.ledger_df.to_csv(index=False).encode("utf-8")
-st.download_button(
-    label="Download Updated CSV Ledger",
-    data=csv_bytes,
-    file_name="convenience_store_2025_2026.csv",
-    mime="text/csv",
-)
