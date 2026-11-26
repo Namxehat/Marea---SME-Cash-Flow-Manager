@@ -36,6 +36,20 @@ USERS = {
 }
 DEMO_PIN = "123456"
 
+ACCOUNTANT_CATEGORIES_BY_TYPE = {
+    "revenue": ["Daily Sales", "Other Revenue"],
+    "inventory": ["Inventory Receipt", "Inventory Payment"],
+    "expense": ["Payroll", "Rent", "Tax", "Other Store Expense"],
+    "financing": ["Bank Overdraft", "Short-Term Borrowing"],
+}
+
+ACCOUNTANT_INVENTORY_BY_TYPE = {
+    "revenue": INVENTORY_OPTIONS_WITH_ALL,
+    "inventory": list(INVENTORY_CATALOG.keys()) + ["All Inventories"],
+    "expense": ["None"],
+    "financing": ["None"],
+}
+
 if "ledger_df" not in st.session_state:
     st.session_state.ledger_df = load_store_ledger(str(CSV_PATH))
 
@@ -178,32 +192,32 @@ if role == "employee":
 elif role == "accountant":
     st.subheader("Accountant Ledger Entry & Policy Controls")
     st.caption(
-        f"Rules: Max supplier payment term = **{STORE_RULES['max_supplier_payment_days']} days** "
+        f"Payment Channel: **bank** | Max supplier payment term = **{STORE_RULES['max_supplier_payment_days']} days** "
         f"(default {STORE_RULES['default_dpo_days']} days) | Payroll normally on the **{STORE_RULES['normal_payroll_day']}th** "
         f"(latest **{STORE_RULES['latest_payroll_day']}th** of following month, adjusted for French holidays) | "
         f"Max overdraft = **€{STORE_RULES['max_bank_overdraft']:,.0f}** | Max short-term borrowing = **€{STORE_RULES['max_short_term_borrowing']:,.0f}**."
     )
 
-    with st.form("accountant_tx_form", clear_on_submit=True):
-        c1, c2, c3, c4 = st.columns(4)
-        tx_type = c1.selectbox("Transaction Type", options=["revenue", "inventory", "expense", "financing"])
-        category = c2.selectbox(
-            "Category",
-            options=[
-                "Daily Sales",
-                "Inventory Receipt",
-                "Inventory Payment",
-                "Payroll",
-                "Rent",
-                "Tax",
-                "Bank Overdraft",
-                "Short-Term Borrowing",
-                "Other Store Expense",
-            ],
-        )
-        inv_type = c3.selectbox("Inventory / Scope", options=["None"] + INVENTORY_OPTIONS_WITH_ALL)
-        pay_method = c4.selectbox("Payment Channel", options=["bank", "cash"])
+    c1, c2, c3 = st.columns(3)
+    tx_type = c1.selectbox(
+        "Transaction Type",
+        options=list(ACCOUNTANT_CATEGORIES_BY_TYPE.keys()),
+        key="acc_tx_type",
+    )
+    category = c2.selectbox(
+        "Category",
+        options=ACCOUNTANT_CATEGORIES_BY_TYPE[tx_type],
+        key=f"acc_category_{tx_type}",
+    )
+    inv_type = c3.selectbox(
+        "Inventory / Scope",
+        options=ACCOUNTANT_INVENTORY_BY_TYPE[tx_type],
+        key=f"acc_inv_{tx_type}",
+    )
 
+    pay_method = "bank"
+
+    with st.form("accountant_tx_form", clear_on_submit=True):
         c5, c6, c7, c8 = st.columns(4)
         tx_date = c5.date_input("Date", value=TODAY.date())
         raw_amount = c6.number_input("Amount (€, positive magnitude)", min_value=0.01, value=500.0, step=50.0)
@@ -226,7 +240,7 @@ elif role == "accountant":
 
             if category == "Short-Term Borrowing" and (kpis["short_term_borrowings"] + raw_amount) > STORE_RULES["max_short_term_borrowing"]:
                 errors.append(f"Short-term borrowing would exceed the €{STORE_RULES['max_short_term_borrowing']:,.0f} cap.")
-            if pay_method == "bank" and signed_amt < 0:
+            if signed_amt < 0:
                 projected_bank = kpis["bank_balance"] + signed_amt
                 if projected_bank < -STORE_RULES["max_bank_overdraft"]:
                     errors.append(f"Bank outflow would exceed the €{STORE_RULES['max_bank_overdraft']:,.0f} overdraft limit.")
