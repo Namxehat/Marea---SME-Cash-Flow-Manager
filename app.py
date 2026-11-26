@@ -290,7 +290,7 @@ elif role == "accountant":
 
 
 # ==============================================================================
-# ROLE 3: RANIA (OWNER) — 5 REQUIRED AREAS + REVENUE SCENARIO + AUDIT CHAIN
+# ROLE 3: RANIA (OWNER) — REORDERED LAYOUT WITH FULL-WIDTH SEPARATE CHARTS
 # ==============================================================================
 else:
     kpis = compute_financial_kpis(df)
@@ -312,26 +312,109 @@ else:
 
     st.divider()
 
-    # --- AREA 2: ACTIONABLE RECOMMENDATIONS WITH FULL TEXT & DECISION CHECKBOXES ---
-    st.subheader("2. Liquidity & Working Capital Recommendations")
-    st.caption("Select any recommendation below to include it in the adjusted cashflow and profit forecast.")
+    # --- AREA 2 (MOVED UP): CASHFLOW FORECAST — BEFORE VS. AFTER CHANGES ---
+    st.subheader("2. Forecasted Cashflow (Before vs. After Changes)")
+    ctrl1, ctrl2 = st.columns([1, 2])
+    horizon_days = ctrl1.selectbox("Forecast Window (Days)", options=[30, 60, 90], index=0)
+    revenue_scenario = ctrl2.selectbox("Revenue Scenario", options=list(REVENUE_SCENARIOS.keys()), index=1)
+    st.caption(REVENUE_SCENARIOS[revenue_scenario]["description"])
+
+    # Read current selections from Recommendations & Non-Recurring Events if already in session_state
+    apply_dpo_20 = bool(st.session_state.get("rec_dpo_20", False))
+    apply_payroll_15th = bool(st.session_state.get("rec_payroll_15th", False))
+    apply_loan_1000 = bool(st.session_state.get("rec_loan_1000", False))
+
+    current_events: list[dict] = []
+    for i in range(1, 6):
+        ev_desc = str(st.session_state.get(f"ev_desc_{i}", "") or "").strip()
+        ev_dmg = float(st.session_state.get(f"ev_dmg_{i}", 0.0) or 0.0)
+        if ev_desc and ev_dmg > 0:
+            current_events.append({
+                "description": ev_desc,
+                "affected_tx": st.session_state.get(f"ev_tx_{i}", "revenue"),
+                "affected_inventory": st.session_state.get(f"ev_inv_{i}", "All Inventories"),
+                "damage_pct": ev_dmg,
+                "start_date": st.session_state.get(f"ev_start_{i}", TODAY.date()),
+                "end_date": st.session_state.get(f"ev_end_{i}", (TODAY + timedelta(days=7)).date()),
+            })
+
+    proj_df = build_owner_forecast(
+        df=df,
+        horizon_days=int(horizon_days),
+        scenario=revenue_scenario,
+        apply_dpo_20=apply_dpo_20,
+        apply_payroll_15th=apply_payroll_15th,
+        apply_loan_1000=apply_loan_1000,
+        events=current_events,
+    )
+
+    before_cf_df = pd.DataFrame({
+        "date": proj_df["date"],
+        "Forecasted Cashflow (€)": proj_df["cum_cash_before"],
+        "Stage": "Before Changes",
+    })
+    after_cf_df = pd.DataFrame({
+        "date": proj_df["date"],
+        "Forecasted Cashflow (€)": proj_df["cum_cash_after"],
+        "Stage": "After Changes",
+    })
+
+    # Chart 1 (Full Width, Distinct Teal Palette)
+    st.markdown(f"**Forecasted Cashflow — Before Changes ({horizon_days} Days — {revenue_scenario})**")
+    chart_before = (
+        alt.Chart(before_cf_df)
+        .mark_line(strokeWidth=3, color="#0D9488")
+        .encode(
+            x=alt.X("date:T", title="Date"),
+            y=alt.Y("Forecasted Cashflow (€):Q", title="Forecasted Cashflow (€)"),
+            tooltip=[
+                alt.Tooltip("date:T", title="Date"),
+                alt.Tooltip("Forecasted Cashflow (€):Q", title="Before Changes (€)", format=",.2f"),
+            ],
+        )
+        .properties(height=320)
+    )
+    st.altair_chart(chart_before, use_container_width=True)
+
+    # Chart 2 (Full Width Below, Distinct Amber/Coral Palette)
+    st.markdown(f"**Forecasted Cashflow — After Changes ({horizon_days} Days — {revenue_scenario})**")
+    chart_after = (
+        alt.Chart(after_cf_df)
+        .mark_line(strokeWidth=3, color="#EA580C")
+        .encode(
+            x=alt.X("date:T", title="Date"),
+            y=alt.Y("Forecasted Cashflow (€):Q", title="Forecasted Cashflow (€)"),
+            tooltip=[
+                alt.Tooltip("date:T", title="Date"),
+                alt.Tooltip("Forecasted Cashflow (€):Q", title="After Changes (€)", format=",.2f"),
+            ],
+        )
+        .properties(height=320)
+    )
+    st.altair_chart(chart_after, use_container_width=True)
+
+    st.divider()
+
+    # --- AREA 3: ACTIONABLE RECOMMENDATIONS WITH FULL TEXT & DECISION CHECKBOXES ---
+    st.subheader("3. Liquidity & Working Capital Recommendations")
+    st.caption("Select any recommendation below to update the After Changes cashflow chart above.")
 
     with st.container(border=True):
-        apply_dpo_20 = st.checkbox(
+        st.checkbox(
             "**Recommendation 1 — Supplier Payment Terms (DPO):** Extend supplier Days Payable Outstanding (DPO) to 20 days starting 10/12/2026 (currently 10 days, which tightens near-term liquidity).",
-            value=False,
+            key="rec_dpo_20",
         )
 
     with st.container(border=True):
-        apply_payroll_15th = st.checkbox(
+        st.checkbox(
             "**Recommendation 2 — Monthly Payroll Timing:** Schedule monthly employee payroll on the 15th of the following month (within the statutory/policy window, adjusted for French holidays).",
-            value=False,
+            key="rec_payroll_15th",
         )
 
     with st.container(border=True):
-        apply_loan_1000 = st.checkbox(
+        st.checkbox(
             "**Recommendation 3 — Short-Term Liquidity Bridge:** Arrange a 60-day short-term credit facility of €1,000 prior to 20/12/2026 to reinforce cash buffer during peak outflows.",
-            value=False,
+            key="rec_loan_1000",
         )
 
     st.divider()
@@ -389,78 +472,6 @@ else:
                     "start_date": ev_start,
                     "end_date": ev_end,
                 })
-
-    st.divider()
-
-    # --- AREA 3: 30 / 60 / 90-DAY FORECAST & BEFORE/AFTER LINE GRAPHS ---
-    st.subheader("3. Cashflow & Profit Forecast (Before vs. After Adjustments)")
-    ctrl1, ctrl2 = st.columns([1, 2])
-    horizon_days = ctrl1.selectbox("Forecast Window (Days)", options=[30, 60, 90], index=0)
-    revenue_scenario = ctrl2.selectbox("Revenue Scenario", options=list(REVENUE_SCENARIOS.keys()), index=1)
-    st.caption(REVENUE_SCENARIOS[revenue_scenario]["description"])
-
-    proj_df = build_owner_forecast(
-        df=df,
-        horizon_days=int(horizon_days),
-        scenario=revenue_scenario,
-        apply_dpo_20=apply_dpo_20,
-        apply_payroll_15th=apply_payroll_15th,
-        apply_loan_1000=apply_loan_1000,
-        events=active_events,
-    )
-
-    cf_long = proj_df.melt(
-        id_vars=["date"],
-        value_vars=["cum_cash_before", "cum_cash_after"],
-        var_name="Series",
-        value_name="Cumulative Cashflow (€)",
-    )
-    cf_long["Series"] = cf_long["Series"].map({
-        "cum_cash_before": "Before Changes (Area 2 & 4)",
-        "cum_cash_after": "After Changes (Area 2 & 4)",
-    })
-
-    profit_long = proj_df.melt(
-        id_vars=["date"],
-        value_vars=["cum_profit_before", "cum_profit_after"],
-        var_name="Series",
-        value_name="Cumulative Profit (€)",
-    )
-    profit_long["Series"] = profit_long["Series"].map({
-        "cum_profit_before": "Before Changes (Area 2 & 4)",
-        "cum_profit_after": "After Changes (Area 2 & 4)",
-    })
-
-    g1, g2 = st.columns(2)
-    with g1:
-        st.markdown(f"**Cumulative Cashflow ({horizon_days} Days — {revenue_scenario})**")
-        chart_cf = (
-            alt.Chart(cf_long)
-            .mark_line(strokeWidth=2.5)
-            .encode(
-                x=alt.X("date:T", title="Date"),
-                y=alt.Y("Cumulative Cashflow (€):Q"),
-                color=alt.Color("Series:N"),
-                tooltip=["date:T", "Series:N", alt.Tooltip("Cumulative Cashflow (€):Q", format=",.2f")],
-            )
-            .properties(height=300)
-        )
-        st.altair_chart(chart_cf, use_container_width=True)
-
-    with g2:
-        st.markdown(f"**Cumulative Profit Trajectory ({horizon_days} Days — {revenue_scenario})**")
-        chart_pr = (
-            alt.Chart(profit_long)
-            .mark_line(strokeWidth=2.5)
-            .encode(
-                x=alt.X("date:T", title="Date"),
-                y=alt.Y("Cumulative Profit (€):Q"),
-                color=alt.Color("Series:N"),
-                tooltip=["date:T", "Series:N", alt.Tooltip("Cumulative Profit (€):Q", format=",.2f")],
-            )
-            .properties(height=300)
-        )
-        st.altair_chart(chart_pr, use_container_width=True)
 
     st.divider()
 
