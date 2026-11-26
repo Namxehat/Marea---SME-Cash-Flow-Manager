@@ -27,7 +27,14 @@ st.set_page_config(
     layout="wide",
 )
 
-CSV_PATH = Path(__file__).parent / "convenience_store_2025_2026.csv"
+BASE_DIR = Path(__file__).parent
+CANDIDATE_CSVS = [
+    BASE_DIR / "convenience_store_2025_2026.csv",
+    BASE_DIR / "convenience_store_2025_2026-v3.csv",
+    BASE_DIR / "convenience_store_2025_2026-v2.csv",
+    BASE_DIR / "convenience_store_2025_2026 (1).csv",
+]
+CSV_PATH = next((p for p in CANDIDATE_CSVS if p.exists()), CANDIDATE_CSVS[0])
 
 USERS = {
     "Nam": {"role": "employee", "label": "Nam — Store Employee"},
@@ -51,7 +58,14 @@ ACCOUNTANT_INVENTORY_BY_TYPE = {
 }
 
 if "ledger_df" not in st.session_state:
-    st.session_state.ledger_df = load_store_ledger(str(CSV_PATH))
+    if CSV_PATH.exists():
+        st.session_state.ledger_df = load_store_ledger(str(CSV_PATH))
+    else:
+        st.error(
+            f"Dataset not found at `{CSV_PATH}`. Please place `convenience_store_2025_2026.csv` "
+            "in the repository root folder."
+        )
+        st.stop()
 
 if "auth_user" not in st.session_state:
     st.session_state.auth_user = None
@@ -298,21 +312,27 @@ else:
 
     st.divider()
 
-    # --- AREA 2: ACTIONABLE RECOMMENDATIONS WITH DECISION CHECKBOXES ---
+    # --- AREA 2: ACTIONABLE RECOMMENDATIONS WITH FULL TEXT & DECISION CHECKBOXES ---
     st.subheader("2. Liquidity & Working Capital Recommendations")
-    r1, r2, r3 = st.columns(3)
-    apply_dpo_20 = r1.checkbox(
-        "Extend supplier Days Payable Outstanding (DPO) to 20 days starting 10/12/2026 (currently 10 days, which tightens near-term liquidity).",
-        value=False,
-    )
-    apply_payroll_15th = r2.checkbox(
-        "Schedule monthly employee payroll on the 15th of the following month (within the statutory/policy window, adjusted for French holidays).",
-        value=False,
-    )
-    apply_loan_1000 = r3.checkbox(
-        "Arrange a 60-day short-term credit facility of €1,000 prior to 20/12/2026 to reinforce cash buffer during peak outflows.",
-        value=False,
-    )
+    st.caption("Select any recommendation below to include it in the adjusted cashflow and profit forecast.")
+
+    with st.container(border=True):
+        apply_dpo_20 = st.checkbox(
+            "**Recommendation 1 — Supplier Payment Terms (DPO):** Extend supplier Days Payable Outstanding (DPO) to 20 days starting 10/12/2026 (currently 10 days, which tightens near-term liquidity).",
+            value=False,
+        )
+
+    with st.container(border=True):
+        apply_payroll_15th = st.checkbox(
+            "**Recommendation 2 — Monthly Payroll Timing:** Schedule monthly employee payroll on the 15th of the following month (within the statutory/policy window, adjusted for French holidays).",
+            value=False,
+        )
+
+    with st.container(border=True):
+        apply_loan_1000 = st.checkbox(
+            "**Recommendation 3 — Short-Term Liquidity Bridge:** Arrange a 60-day short-term credit facility of €1,000 prior to 20/12/2026 to reinforce cash buffer during peak outflows.",
+            value=False,
+        )
 
     st.divider()
 
