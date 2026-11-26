@@ -86,21 +86,23 @@ def adjust_payroll_date(target_date: pd.Timestamp, latest_day: int = 15) -> pd.T
 
 
 def _canonical_row_payload(row: pd.Series, prev_hash: str) -> str:
+    row_date = pd.to_datetime(row.get("date"), errors="coerce")
+    date_str = str(row_date.date()) if pd.notna(row_date) else ""
     payload = {
         "prev_hash": prev_hash,
         "tx_id": str(row.get("tx_id", "")),
-        "date": str(pd.to_datetime(row["date"]).date()),
+        "date": date_str,
         "description": str(row.get("description", "")),
         "category": str(row.get("category", "")),
         "tx_type": str(row.get("tx_type", "")),
         "inventory_type": str(row.get("inventory_type", "")),
-        "quantity": round(float(row.get("quantity", 0.0)), 2),
-        "unit_price": round(float(row.get("unit_price", 0.0)), 2),
-        "amount": round(float(row.get("amount", 0.0)), 2),
+        "quantity": round(float(pd.to_numeric(row.get("quantity", 0.0), errors="coerce") or 0.0), 2),
+        "unit_price": round(float(pd.to_numeric(row.get("unit_price", 0.0), errors="coerce") or 0.0), 2),
+        "amount": round(float(pd.to_numeric(row.get("amount", 0.0), errors="coerce") or 0.0), 2),
         "payment_method": str(row.get("payment_method", "")),
         "status": str(row.get("status", "")),
-        "payment_term_days": int(row.get("payment_term_days", 0)),
-        "expected_delay_days": int(row.get("expected_delay_days", 0)),
+        "payment_term_days": int(pd.to_numeric(row.get("payment_term_days", 0), errors="coerce") or 0),
+        "expected_delay_days": int(pd.to_numeric(row.get("expected_delay_days", 0), errors="coerce") or 0),
     }
     return json.dumps(payload, sort_keys=True)
 
@@ -108,6 +110,10 @@ def _canonical_row_payload(row: pd.Series, prev_hash: str) -> str:
 def compute_hash_chain(df: pd.DataFrame) -> pd.DataFrame:
     """Computes a sequential SHA-256 hash chain across all rows in order."""
     out = df.copy().reset_index(drop=True)
+    if out.empty:
+        out["computed_hash"] = pd.Series(dtype=str)
+        return out
+
     prev_hash = "GENESIS"
     computed_hashes = []
     for _, row in out.iterrows():
@@ -121,25 +127,36 @@ def compute_hash_chain(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def audit_ledger_integrity(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
-    """Flags duplicate transactions and hash-chain tampering."""
-    if df.empty:
-        return df.copy(), {"tampered_count": 0, "duplicate_count": 0, "is_clean": True}
+    """Flags duplicate transactions and hash-chain tampering safely."""
+    if df is None or df.empty:
+        empty_df = pd.DataFrame(
+            columns=REQUIRED_COLUMNS + ["computed_hash", "is_duplicate", "is_tampered", "audit_status"]
+        )
+        return empty_df, {"tampered_count": 0, "duplicate_count": 0, "is_clean": True}
 
     chained = compute_hash_chain(df)
-    dup_mask = chained.duplicated(
-        subset=["date", "description", "category", "tx_type", "amount", "status"],
-        keep="first",
-    )
+    for col in REQUIRED_COLUMNS:
+        if col not in chained.columns:
+            chained[col] = ""
+
+    dup_subset = [
+        c for c in ["date", "description", "category", "tx_type", "amount", "status"]
+        if c in chained.columns
+    ]
+    if dup_subset:
+        dup_mask = chained.duplicated(subset=dup_subset, keep="first")
+    else:
+        dup_mask = pd.Series([False] * len(chained), index=chained.index)
 
     tampered_flags = []
     for _, row in chained.iterrows():
-        stored = str(row.get("entry_hash", "")).strip()
-        # Blank entry_hash on initial starter seed is initialized on save; non-matching non-blank hash = tampered
-        is_tampered = bool(stored) and (stored != row["computed_hash"])
+        stored = str(row.get("entry_hash", "") or "").strip()
+        computed = str(row.get("computed_hash", "") or "").strip()
+        is_tampered = bool(stored) and (stored != computed)
         tampered_flags.append(is_tampered)
 
-    chained["is_duplicate"] = dup_mask
-    chained["is_tampered"] = tampered_flags
+    chained["is_duplicate"] = dup_mask.astype(bool)
+    chained["is_tampered"] = pd.Series(tampered_flags, index=chained.index, dtype=bool)
     chained["audit_status"] = np.where(
         chained["is_tampered"],
         "TAMPERED",
@@ -158,7 +175,11 @@ def audit_ledger_integrity(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
 def seal_ledger_hashes(df: pd.DataFrame) -> pd.DataFrame:
     """Writes valid SHA-256 chain hashes into entry_hash so saved CSV rows have verified hashes."""
     chained = compute_hash_chain(df)
-    chained["entry_hash"] = chained["computed_hash"]
+    for col in REQUIRED_COLUMNS:
+        if col not in chained.columns:
+            chained[col] = ""
+    if not chained.empty:
+        chained["entry_hash"] = chained["computed_hash"]
     return chained[REQUIRED_COLUMNS]
 
 
@@ -188,8 +209,7 @@ def load_store_ledger(csv_path: str) -> pd.DataFrame:
     )
     df["entry_hash"] = df["entry_hash"].fillna("").astype(str)
 
-    # Seal hashes cleanly on load if starter hashes were left blank
-    if (df["entry_hash"].str.strip() == "").all():
+    if not df.empty and (df["entry_hash"].str.strip() == "").all():
         df = seal_ledger_hashes(df)
 
     return df.reset_index(drop=True)
@@ -198,7 +218,8 @@ def load_store_ledger(csv_path: str) -> pd.DataFrame:
 def save_store_ledger(df: pd.DataFrame, csv_path: str) -> pd.DataFrame:
     sealed = seal_ledger_hashes(df)
     sealed_to_save = sealed.copy()
-    sealed_to_save["date"] = sealed_to_save["date"].dt.strftime("%Y-%m-%d")
+    if not sealed_to_save.empty:
+        sealed_to_save["date"] = pd.to_datetime(sealed_to_save["date"]).dt.strftime("%Y-%m-%d")
     sealed_to_save.to_csv(csv_path, index=False)
     return sealed
 
@@ -213,7 +234,6 @@ def recommend_cashflow_threshold(df: pd.DataFrame) -> dict:
     monthly_net = actuals.groupby("month")["amount"].sum()
     median_net = float(monthly_net.median()) if not monthly_net.empty else 0.0
     std_net = float(monthly_net.std()) if len(monthly_net) > 1 else 1000.0
-    # Conservative buffer: ~40% of monthly volatility, clamped between EUR 1,500 and EUR 6,000
     rec = float(np.clip(abs(std_net) * 0.4, 1500.0, 6000.0))
     return {
         "recommended_threshold": round(rec, 2),
@@ -240,7 +260,6 @@ def compute_financial_kpis(df: pd.DataFrame) -> dict:
     )
     total_cash_and_bank = cash_balance + bank_balance
 
-    # Track active overdraft (negative bank balance) and active short-term borrowings
     overdraft_used = float(max(0.0, -bank_balance))
     borrowings_rows = actuals[
         actuals["category"].str.lower().str.contains("borrowing|loan")
@@ -282,7 +301,6 @@ def evaluate_non_recurring_events(events: list[dict]) -> dict:
         scale_factor = damage_pct / 100.0
         inv_factor = 1.0 if inv_type == "All Inventories" else 0.35
 
-        # Base daily magnitudes for a 5-employee convenience store
         if affected_tx == "revenue":
             rev_impact = -round(140.0 * active_days * scale_factor * inv_factor, 2)
             cost_impact = 0.0
@@ -292,8 +310,7 @@ def evaluate_non_recurring_events(events: list[dict]) -> dict:
                 f"estimated revenue change of €{rev_impact:,.2f} and cashflow impact of €{cf_impact:,.2f}."
             )
         elif affected_tx == "inventories":
-            # Supply disruption lowers supplier cost outflow but can also reduce sellable stock revenue
-            cost_impact = round(45.0 * active_days * scale_factor * inv_factor, 2)  # positive = cost reduction
+            cost_impact = round(45.0 * active_days * scale_factor * inv_factor, 2)
             rev_impact = -round(60.0 * active_days * scale_factor * inv_factor, 2)
             cf_impact = round(cost_impact + rev_impact, 2)
             summaries.append(
@@ -301,7 +318,7 @@ def evaluate_non_recurring_events(events: list[dict]) -> dict:
                 f"reduces inventory costs by €{cost_impact:,.2f}, decreases revenue by €{abs(rev_impact):,.2f}, "
                 f"net cashflow impact €{cf_impact:,.2f}."
             )
-        else:  # tax or other charges
+        else:
             cost_impact = -round(35.0 * active_days * scale_factor, 2)
             rev_impact = 0.0
             cf_impact = cost_impact
@@ -346,11 +363,9 @@ def build_owner_forecast(
     end_dt = anchor + timedelta(days=horizon_days)
     cal = pd.date_range(start=anchor, end=end_dt, freq="D")
 
-    # Baseline daily cashflow & profit from planned rows + baseline daily run-rate
     base_cf = pd.Series(0.0, index=cal)
     base_profit = pd.Series(0.0, index=cal)
 
-    # Smooth baseline daily revenue & recurring store costs across forecast horizon
     avg_daily_rev = 85.0 * rev_mult
     avg_daily_cost = 65.0
     base_cf += avg_daily_rev - avg_daily_cost
@@ -359,7 +374,6 @@ def build_owner_forecast(
     for _, row in planned.iterrows():
         dt = pd.to_datetime(row["date"]).normalize()
         amt = float(row["amount"])
-        cat = str(row["category"]).lower()
         tx_type = str(row["tx_type"]).lower()
 
         if tx_type == "revenue":
@@ -370,21 +384,18 @@ def build_owner_forecast(
             if tx_type in {"revenue", "expense", "inventory"}:
                 base_profit.loc[dt] += amt
 
-    # Adjusted series (starts from baseline, applies Area 2 recommendations + Area 4 events)
     adj_cf = base_cf.copy()
     adj_profit = base_profit.copy()
 
     if apply_dpo_20:
-        # Extending DPO from 10 to 20 days starting 2026-12-10 defers ~10 days of supplier outflow
         dpo_shift_start = pd.Timestamp("2026-12-10")
         for dt in adj_cf.index:
             if dt >= dpo_shift_start and dt < dpo_shift_start + timedelta(days=10):
-                adj_cf.loc[dt] += 132.0  # frees cash on December window
+                adj_cf.loc[dt] += 132.0
             elif dt >= dpo_shift_start + timedelta(days=10) and dt < dpo_shift_start + timedelta(days=20):
                 adj_cf.loc[dt] -= 132.0
 
     if apply_payroll_15th:
-        # Shifting monthly payroll from 10th to 15th relieves cash on the 10th-14th
         for dt in adj_cf.index:
             if dt.day == 10:
                 adj_cf.loc[dt] += 8600.0
@@ -393,16 +404,14 @@ def build_owner_forecast(
                     adj_cf.loc[target_15] -= 8600.0
 
     if apply_loan_1000:
-        # Short-term 60-day loan of EUR 1,000 drawn before 2026-12-20 (modeled on 2026-12-18)
         draw_dt = pd.Timestamp("2026-12-18")
         if draw_dt in adj_cf.index:
             adj_cf.loc[draw_dt] += 1000.0
         repay_dt = draw_dt + timedelta(days=60)
         if repay_dt in adj_cf.index:
-            adj_cf.loc[repay_dt] -= 1015.0  # principal + minor 1.5% short-term interest
+            adj_cf.loc[repay_dt] -= 1015.0
             adj_profit.loc[repay_dt] -= 15.0
 
-    # Apply Area 4 non-recurring events across their active date ranges
     for ev in events:
         name = (ev.get("description") or "").strip()
         dmg = float(ev.get("damage_pct") or 0.0)
