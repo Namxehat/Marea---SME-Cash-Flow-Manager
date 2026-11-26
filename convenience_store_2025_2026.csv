@@ -5,7 +5,7 @@ TX-0003,2025-01-03,Bakery & Ready-to-Eat register settlement,Daily Sales,revenue
 TX-0004,2025-01-04,Fresh Produce & Dairy register settlement,Daily Sales,revenue,Bananas & Produce,812.8,actual,bank,144.1,4.0,0,0,5dcc05d2c2c1f76b
 TX-0005,2025-01-04,Store restock — Dry Goods & Packaged,Inventory Payment,expense,Household & Pantry,-851.8,actual,bank,200.9,4.0,10,10,ee89270f0f0b7ccb
 TX-0006,2025-01-05,Local Café Supply register settlement,Other Revenue,revenue,Dairy & Bakery,20.0,actual,bank,16.1,4.0,0,0,331d3a1c556f7614
-TX-0007,2025-01-05,Monthly lease & utilities (Jan 2025),Rent,expense,None,-0.0,actual,bank,388.0,4.0,0,1,91c124ab2f402583
+TX-0007,2025-01-05,Monthly lease & utilities (Jan 2025),Rent,expense,None,-5880.0,actual,bank,388.0,4.0,0,1,91c124ab2f402583
 TX-0008,2025-01-06,Prepaid Store Cards register settlement,Other Revenue,revenue,Household & Pantry,215.59,actual,bank,66.7,4.0,0,0,288f309a6765af44
 TX-0009,2025-01-07,General Grocery & Snacks register settlement,Daily Sales,revenue,Beverages & Snacks,324.9,actual,bank,80.2,4.0,0,0,ff5b6992ca455950
 TX-0010,2025-01-07,Store restock — Beverages & Coffee,Inventory Payment,expense,Beverages & Snacks,-893.07,actual,bank,238.0,4.0,10,10,a5631e6e15f662a7
@@ -436,7 +436,7 @@ TX-0434,2025-10-04,General Grocery & Snacks register settlement,Daily Sales,reve
 TX-0435,2025-10-04,Store restock — Fresh Produce & Dairy,Inventory Payment,expense,Bananas & Produce,-1003.26,actual,bank,235.8,4.0,10,10,ca12dbee5a77fcb6
 TX-0436,2025-10-04,Supplier invoice (10d terms) — Beverages & Coffee,Inventory Payment,expense,Beverages & Snacks,-1022.78,actual,bank,196.4,4.0,10,10,a6a877b56b609568
 TX-0437,2025-10-05,Beverages & Coffee register settlement,Daily Sales,revenue,Beverages & Snacks,20.0,actual,bank,14.9,4.01,0,0,0326549f6e122071
-TX-0438,2025-10-05,Monthly lease & utilities (Oct 2025),Rent,expense,None,-0.0,actual,bank,388.0,4.0,0,1,1fb2064d4ce79eb3
+TX-0438,2025-10-05,Monthly lease & utilities (Oct 2025),Rent,expense,None,-699.0,actual,bank,388.0,4.0,0,1,1fb2064d4ce79eb3
 TX-0439,2025-10-06,Bakery & Ready-to-Eat register settlement,Daily Sales,revenue,Dairy & Bakery,246.25,actual,bank,65.7,4.0,0,0,ea799207ee911b1a
 TX-0440,2025-10-07,Fresh Produce & Dairy register settlement,Daily Sales,revenue,Bananas & Produce,312.03,actual,bank,79.9,4.0,0,0,6a8d32f43be2e71b
 TX-0441,2025-10-07,Store restock — Dry Goods & Packaged,Inventory Payment,expense,Household & Pantry,-802.96,actual,bank,219.1,4.0,10,10,3ae6c2c232270dd8
@@ -723,7 +723,7 @@ TX-0721,2026-04-03,Beverages & Coffee register settlement,Daily Sales,revenue,Be
 TX-0722,2026-04-04,Bakery & Ready-to-Eat register settlement,Daily Sales,revenue,Dairy & Bakery,750.55,actual,bank,129.7,4.0,0,0,ebfcc19c01a8e4e4
 TX-0723,2026-04-05,Fresh Produce & Dairy register settlement,Daily Sales,revenue,Bananas & Produce,20.0,actual,bank,16.2,4.01,0,0,ddd79427f2719e1e
 TX-0724,2026-04-05,Store restock — Dry Goods & Packaged,Inventory Payment,expense,Household & Pantry,-0.0,actual,bank,0.0,0.0,10,10,ef34a93f9e1888c2
-TX-0725,2026-04-05,Monthly lease & utilities (Apr 2026),Rent,expense,None,-0.0,actual,bank,398.9,4.0,0,2,c173f20be7cc2de3
+TX-0725,2026-04-05,Monthly lease & utilities (Apr 2026),Rent,expense,None,-521.0,actual,bank,398.9,4.0,0,2,c173f20be7cc2de3
 TX-0726,2026-04-06,Local Café Supply register settlement,Other Revenue,revenue,Dairy & Bakery,280.61,actual,bank,75.2,4.0,0,0,c6c130a577d4e0ea
 TX-0727,2026-04-07,Prepaid Store Cards register settlement,Other Revenue,revenue,Household & Pantry,268.4,actual,bank,72.0,4.0,0,0,882f2d41c88b24b5
 TX-0728,2026-04-08,General Grocery & Snacks register settlement,Daily Sales,revenue,Beverages & Snacks,270.67,actual,bank,72.1,4.0,0,0,f061bc32a3a56c3e
@@ -866,7 +866,7 @@ TX-0864,2026-07-03,Bakery & Ready-to-Eat register settlement,Daily Sales,revenue
 TX-0865,2026-07-04,Fresh Produce & Dairy register settlement,Daily Sales,revenue,Bananas & Produce,854.01,actual,bank,162.6,4.0,0,0,00e3e02a76456805
 TX-0866,2026-07-04,Store restock — Bakery & Ready-to-Eat,Inventory Payment,expense,Dairy & Bakery,-894.92,actual,bank,240.8,4.0,10,11,abc5bff459dcc957
 TX-0867,2026-07-05,Local Café Supply register settlement,Other Revenue,revenue,Dairy & Bakery,20.0,actual,bank,17.4,4.0,0,0,18816cf78da73b4b
-TX-0868,2026-07-05,Monthly lease & utilities (Jul 2026),Rent,expense,None,-0.0,actual,bank,398.9,4.0,0,1,9b8412b5e829d8c5
+TX-0868,2026-07-05,Monthly lease & utilities (Jul 2026),Rent,expense,None,-732.0,actual,bank,398.9,4.0,0,1,9b8412b5e829d8c5
 TX-0869,2026-07-06,Prepaid Store Cards register settlement,Other Revenue,revenue,Household & Pantry,240.01,actual,bank,74.7,4.0,0,0,32207e26ae663a35
 TX-0870,2026-07-07,General Grocery & Snacks register settlement,Daily Sales,revenue,Beverages & Snacks,292.19,actual,bank,76.5,4.0,0,0,58c8474c182f4795
 TX-0871,2026-07-07,Store restock — Fresh Produce & Dairy,Inventory Payment,expense,Bananas & Produce,-931.58,actual,bank,210.9,4.0,10,10,a572213b864aeaa3
