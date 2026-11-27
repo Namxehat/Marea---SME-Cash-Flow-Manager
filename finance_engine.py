@@ -23,11 +23,16 @@ STORE_RULES: dict[str, Any] = {
     "closed_weekday": 6,  # Store is closed on Sunday (Monday=0 .. Sunday=6)
     "default_dpo_days": 10,
     "extended_dpo_days": 20,
+    "dpo_deferral_days": 10,  # +10 days shift from 10-day to 20-day supplier DPO
     "max_supplier_payment_days": 90,
     "normal_payroll_day": 10,
     "latest_payroll_day": 15,
+    "payroll_deferral_days": 5,  # 5-day intra-month shift from the 10th to the 15th
     "max_bank_overdraft": 5000.0,
+    "overdraft_payback_days": 30,
+    "overdraft_interest_pct": 8.5,
     "max_short_term_borrowing": 10000.0,
+    "short_term_borrowing_payback_days": 60,
     "recommended_loan_amount": 1000.0,
     "recommended_loan_term_days": 60,
     "recommended_loan_interest_pct": 4.5,
@@ -264,12 +269,23 @@ def _apply_event_to_day(
         new_cost = round(max(0.0, cost_val * (1.0 - dmg * inv_factor)), 2)
         new_rev = round(max(0.0, rev_val * (1.0 - 0.35 * dmg * inv_factor)), 2)
     else:
+        # Fallback for non-revenue/non-inventory categories (e.g., tax/fees):
+        # treat positive cost delta as an added outflow and scale by day weight & damage.
         added_outflow = round(max(0.0, cost_val * 0.25 * inv_factor * dmg), 2)
         new_cost = round(cost_val + added_outflow, 2)
 
     rev_delta = round(new_rev - rev_val, 2)
+    # Positive cost_delta represents a net reduction in cash cost (cashflow inflow),
+    # matching the sign convention used in evaluate_non_recurring_events (net_cf = rev_delta + cost_delta).
     cost_delta = round(cost_val - new_cost, 2)
     return new_rev, new_cost, rev_delta, cost_delta
+
+
+def _next_open_business_day(target_date: pd.Timestamp) -> pd.Timestamp:
+    dt = pd.Timestamp(target_date).normalize()
+    while dt.weekday() == STORE_RULES["closed_weekday"]:
+        dt += timedelta(days=1)
+    return dt
 
 
 def evaluate_non_recurring_events(
@@ -348,6 +364,7 @@ def build_owner_forecast(
     apply_dpo_20: bool = False,
     apply_payroll_15th: bool = False,
     apply_loan_1000: bool = False,
+    enforce_overdraft_payback: bool = True,
     events: list[dict[str, Any]] | None = None,
 ) -> pd.DataFrame:
     events = events or []
@@ -367,12 +384,25 @@ def build_owner_forecast(
     cum_profit_before = 0.0
     cum_profit_after = 0.0
 
+    # Payback / settlement schedules (all temporary reliefs settle on their due dates):
+    # 1. Supplier DPO extension (10 -> 20 days): +10-day deferral repaid 10 days later.
+    # 2. Monthly payroll shift (10th -> 15th): +5-day intra-month deferral paid on the 15th.
+    # 3. Short-term borrowing (€1,000): 60-day fixed payback period with interest.
+    # 4. Bank overdraft: 30-day fixed payback period from initial overdraft draw.
+    dpo_shift_days = int(STORE_RULES["extended_dpo_days"]) - int(STORE_RULES["default_dpo_days"])
+    scheduled_dpo_repayments: dict[pd.Timestamp, float] = {}
+
     loan_amt = float(STORE_RULES["recommended_loan_amount"])
-    loan_term = int(STORE_RULES["recommended_loan_term_days"])
+    loan_term = int(STORE_RULES["short_term_borrowing_payback_days"])
     interest_total = round(
         loan_amt * (float(STORE_RULES["recommended_loan_interest_pct"]) / 100.0) * (loan_term / 365.0),
         2,
     )
+
+    overdraft_payback_days = int(STORE_RULES["overdraft_payback_days"])
+    overdraft_rate = float(STORE_RULES["overdraft_interest_pct"]) / 100.0
+    overdraft_draw_start: pd.Timestamp | None = start_anchor if start_cash < 0 else None
+    overdraft_peak_principal: float = max(0.0, -start_cash)
 
     for idx, d in enumerate(dates):
         dow = d.weekday()
@@ -399,16 +429,34 @@ def build_owner_forecast(
         cf_adj_after = 0.0
         profit_adj_after = 0.0
 
-        if not is_closed_sunday:
-            if apply_dpo_20 and d >= pd.Timestamp("2026-12-10"):
-                cf_adj_after += round(cost_after * 0.25, 2)
-            if apply_payroll_15th and d.day == 15:
-                cf_adj_after += 350.0
+        # Action 1: Supplier DPO extension (10d -> 20d) defers 25% of daily inventory/cost outflow
+        # by 10 days, then settles the deferred supplier payable on the new due date.
+        if apply_dpo_20:
+            if not is_closed_sunday and d >= pd.Timestamp("2026-12-10"):
+                deferred_amt = round(cost_after * 0.25, 2)
+                cf_adj_after += deferred_amt
+                due_dt = _next_open_business_day(d + timedelta(days=dpo_shift_days))
+                scheduled_dpo_repayments[due_dt] = round(
+                    scheduled_dpo_repayments.get(due_dt, 0.0) + deferred_amt,
+                    2,
+                )
+            if d in scheduled_dpo_repayments:
+                cf_adj_after -= scheduled_dpo_repayments[d]
 
+        # Action 2: Monthly payroll shift from the 10th to the 15th (+5-day intra-month deferral):
+        # defers €350 on the 10th and settles it 5 days later on the 15th (net zero across the month).
+        if apply_payroll_15th:
+            if d.day == int(STORE_RULES["normal_payroll_day"]):
+                cf_adj_after += 350.0
+            elif d.day == int(STORE_RULES["latest_payroll_day"]):
+                cf_adj_after -= 350.0
+
+        # Action 3: Short-term borrowing (€1,000) with a fixed 60-day payback period + interest.
         if apply_loan_1000:
-            if d == pd.Timestamp("2026-12-01") or (idx == 0 and pd.Timestamp("2026-12-01") < start_anchor):
+            draw_date = pd.Timestamp("2026-12-01")
+            if d == draw_date or (idx == 0 and draw_date < start_anchor):
                 cf_adj_after += loan_amt
-            repay_date = pd.Timestamp("2026-12-01") + timedelta(days=loan_term)
+            repay_date = draw_date + timedelta(days=loan_term)
             if d == repay_date:
                 cf_adj_after -= round(loan_amt + interest_total, 2)
                 profit_adj_after -= interest_total
@@ -416,11 +464,40 @@ def build_owner_forecast(
         net_cf_before = round(rev_before - cost_before, 2)
         net_cf_after = round(rev_after - cost_after + cf_adj_after, 2)
 
+        tentative_cash_after = round(cum_cash_after + net_cf_after, 2)
+
+        # Bank overdraft 30-day fixed payback rule:
+        # Track when the account enters overdraft and settle any remaining overdraft + 30-day accrued interest
+        # at the 30-day payback deadline.
+        if enforce_overdraft_payback:
+            if tentative_cash_after < 0:
+                if overdraft_draw_start is None:
+                    overdraft_draw_start = d
+                overdraft_peak_principal = max(overdraft_peak_principal, abs(tentative_cash_after))
+            elif overdraft_draw_start is not None and tentative_cash_after >= 0:
+                overdraft_draw_start = None
+                overdraft_peak_principal = 0.0
+
+            if overdraft_draw_start is not None:
+                od_due_date = overdraft_draw_start + timedelta(days=overdraft_payback_days)
+                if d >= od_due_date and tentative_cash_after < 0:
+                    od_principal = abs(tentative_cash_after)
+                    od_interest = round(
+                        overdraft_peak_principal * overdraft_rate * (overdraft_payback_days / 365.0),
+                        2,
+                    )
+                    od_settlement = round(od_principal + od_interest, 2)
+                    net_cf_after = round(net_cf_after - od_settlement, 2)
+                    profit_adj_after = round(profit_adj_after - od_interest, 2)
+                    tentative_cash_after = round(cum_cash_after + net_cf_after, 2)
+                    overdraft_draw_start = None
+                    overdraft_peak_principal = 0.0
+
         net_profit_before = round(rev_before - cost_before, 2)
         net_profit_after = round(rev_after - cost_after + profit_adj_after, 2)
 
         cum_cash_before = round(cum_cash_before + net_cf_before, 2)
-        cum_cash_after = round(cum_cash_after + net_cf_after, 2)
+        cum_cash_after = tentative_cash_after
         cum_profit_before = round(cum_profit_before + net_profit_before, 2)
         cum_profit_after = round(cum_profit_after + net_profit_after, 2)
 
