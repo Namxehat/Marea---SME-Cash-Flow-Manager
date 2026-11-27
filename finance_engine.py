@@ -74,6 +74,16 @@ LEDGER_COLUMNS: list[str] = [
     "entry_hash",
 ]
 
+DOW_WEIGHTS: dict[int, float] = {
+    0: 0.85,
+    1: 0.92,
+    2: 0.98,
+    3: 1.05,
+    4: 1.22,
+    5: 1.32,
+    6: 0.0,
+}
+
 
 def _normalize_date_str(val: Any) -> str:
     dt = pd.to_datetime(val, errors="coerce")
@@ -211,41 +221,115 @@ def recommend_cashflow_threshold(df: pd.DataFrame) -> dict[str, float]:
     return {"recommended_threshold": rec, "daily_std": round(daily_std, 2)}
 
 
-def evaluate_non_recurring_events(events: list[dict[str, Any]]) -> dict[str, Any]:
+def _compute_baseline_daily_rates(df: pd.DataFrame, scenario: str = "Realistic") -> tuple[float, float]:
+    scen_cfg = REVENUE_SCENARIOS.get(scenario, REVENUE_SCENARIOS["Realistic"])
+    scen_mult = float(scen_cfg["multiplier"])
+
+    if df is None or df.empty:
+        base_weekday_rev = 380.0
+    else:
+        actuals = df[df["status"].astype(str).str.lower() == "actual"].copy()
+        actuals["dt"] = pd.to_datetime(actuals["date"], errors="coerce")
+        actuals["dow"] = actuals["dt"].dt.dayofweek
+        rev_act = actuals[(actuals["tx_type"] == "revenue") & (actuals["dow"] != STORE_RULES["closed_weekday"])]
+        base_weekday_rev = float(rev_act["amount"].mean()) if not rev_act.empty else 380.0
+
+    # Keep fixed daily operating expenses independent of the revenue scenario multiplier
+    # while scaling variable inventory replenishment with scenario revenue so scenarios diverge realistically.
+    base_open_rev = max(240.0, min(650.0, base_weekday_rev))
+    daily_open_rev = base_open_rev * scen_mult
+    fixed_daily_opex = base_open_rev * 0.55
+    variable_daily_cogs = daily_open_rev * 0.35
+    daily_open_cost = fixed_daily_opex + variable_daily_cogs
+    return daily_open_rev, daily_open_cost
+
+
+def _apply_event_to_day(
+    ev: dict[str, Any],
+    rev_val: float,
+    cost_val: float,
+) -> tuple[float, float, float, float]:
+    tx = str(ev.get("affected_tx", "revenue")).lower()
+    inv = str(ev.get("affected_inventory", "All Inventories"))
+    dmg = float(ev.get("damage_pct", 0.0)) / 100.0
+    inv_factor = 1.0 if inv == "All Inventories" else 0.25
+
+    new_rev = rev_val
+    new_cost = cost_val
+
+    if tx == "revenue":
+        new_rev = round(max(0.0, rev_val * (1.0 - dmg * inv_factor)), 2)
+        new_cost = round(max(0.0, cost_val * (1.0 - 0.45 * dmg * inv_factor)), 2)
+    elif tx in {"inventories", "inventory"}:
+        new_cost = round(max(0.0, cost_val * (1.0 - dmg * inv_factor)), 2)
+        new_rev = round(max(0.0, rev_val * (1.0 - 0.35 * dmg * inv_factor)), 2)
+    else:
+        added_outflow = round(max(0.0, cost_val * 0.25 * inv_factor * dmg), 2)
+        new_cost = round(cost_val + added_outflow, 2)
+
+    rev_delta = round(new_rev - rev_val, 2)
+    cost_delta = round(cost_val - new_cost, 2)
+    return new_rev, new_cost, rev_delta, cost_delta
+
+
+def evaluate_non_recurring_events(
+    events: list[dict[str, Any]],
+    df: pd.DataFrame | None = None,
+    scenario: str = "Realistic",
+) -> dict[str, Any]:
     total_rev_delta = 0.0
     total_cost_delta = 0.0
     summaries: list[str] = []
+
+    daily_open_rev, daily_open_cost = _compute_baseline_daily_rates(df, scenario=scenario)
 
     for ev in events or []:
         desc = str(ev.get("description", "Event")).strip()
         tx = str(ev.get("affected_tx", "revenue")).lower()
         inv = str(ev.get("affected_inventory", "All Inventories"))
-        dmg = float(ev.get("damage_pct", 0.0)) / 100.0
-        start_d = pd.to_datetime(ev.get("start_date", TODAY.date()))
-        end_d = pd.to_datetime(ev.get("end_date", TODAY.date()))
-        days = max(1, (end_d - start_d).days + 1)
+        dmg_pct = float(ev.get("damage_pct", 0.0))
+        start_d = pd.to_datetime(ev.get("start_date", TODAY.date())).normalize()
+        end_d = pd.to_datetime(ev.get("end_date", TODAY.date())).normalize()
 
-        inv_share = 1.0 if inv == "All Inventories" else 0.25
+        if end_d < start_d:
+            end_d = start_d
+
+        span_days = (end_d - start_d).days + 1
+        event_rev_delta = 0.0
+        event_cost_delta = 0.0
+        open_days_count = 0
+
+        for offset in range(span_days):
+            cur_d = start_d + timedelta(days=offset)
+            if cur_d.weekday() == STORE_RULES["closed_weekday"]:
+                continue
+            open_days_count += 1
+            w = DOW_WEIGHTS.get(cur_d.weekday(), 1.0)
+            base_rev = round(daily_open_rev * w, 2)
+            base_cost = round(daily_open_cost * w, 2)
+            _, _, r_delta, c_delta = _apply_event_to_day(ev, base_rev, base_cost)
+            event_rev_delta = round(event_rev_delta + r_delta, 2)
+            event_cost_delta = round(event_cost_delta + c_delta, 2)
+
+        total_rev_delta = round(total_rev_delta + event_rev_delta, 2)
+        total_cost_delta = round(total_cost_delta + event_cost_delta, 2)
+
         if tx == "revenue":
-            rev_loss = -round(420.0 * days * inv_share * dmg, 2)
-            cost_change = round(abs(rev_loss) * 0.45, 2)
-            total_rev_delta += rev_loss
-            total_cost_delta += cost_change
             summaries.append(
-                f"{desc} ({days}d, {inv}): estimated revenue impact €{rev_loss:,.2f} and cost savings €{cost_change:,.2f}."
+                f"{desc} ({span_days}d window, {open_days_count} open day(s), {inv}, {dmg_pct:g}% impact, {scenario}): "
+                f"estimated revenue impact €{event_rev_delta:,.2f} and cost savings €{event_cost_delta:,.2f}."
             )
         elif tx in {"inventories", "inventory"}:
-            cost_savings = round(260.0 * days * inv_share * dmg, 2)
-            rev_loss = -round(cost_savings * 1.35, 2)
-            total_rev_delta += rev_loss
-            total_cost_delta += cost_savings
             summaries.append(
-                f"{desc} ({days}d, {inv}): supply shortfall reduces inventory outflows by €{cost_savings:,.2f} but lowers sales by €{abs(rev_loss):,.2f}."
+                f"{desc} ({span_days}d window, {open_days_count} open day(s), {inv}, {dmg_pct:g}% impact, {scenario}): "
+                f"supply shortfall reduces inventory outflows by €{event_cost_delta:,.2f} "
+                f"but lowers sales by €{abs(event_rev_delta):,.2f}."
             )
         else:
-            tax_delta = -round(95.0 * days * dmg, 2)
-            total_cost_delta += tax_delta
-            summaries.append(f"{desc} ({days}d, {tx}): estimated tax/fee cashflow impact €{tax_delta:,.2f}.")
+            summaries.append(
+                f"{desc} ({span_days}d window, {open_days_count} open day(s), {tx}, {dmg_pct:g}% impact, {scenario}): "
+                f"estimated net cost/outflow delta €{event_cost_delta:,.2f}."
+            )
 
     net_cf_delta = round(total_rev_delta + total_cost_delta, 2)
     return {
@@ -266,29 +350,12 @@ def build_owner_forecast(
     apply_loan_1000: bool = False,
     events: list[dict[str, Any]] | None = None,
 ) -> pd.DataFrame:
-    scen_cfg = REVENUE_SCENARIOS.get(scenario, REVENUE_SCENARIOS["Realistic"])
-    scen_mult = float(scen_cfg["multiplier"])
     events = events or []
 
     kpis = compute_financial_kpis(df)
     start_cash = float(kpis["total_cash_and_bank"]) if opening_cash is None else float(opening_cash)
 
-    actuals = df[df["status"].astype(str).str.lower() == "actual"].copy()
-    actuals["dt"] = pd.to_datetime(actuals["date"], errors="coerce")
-    actuals["dow"] = actuals["dt"].dt.dayofweek
-
-    rev_act = actuals[(actuals["tx_type"] == "revenue") & (actuals["dow"] != 6)]
-    base_weekday_rev = float(rev_act["amount"].mean()) if not rev_act.empty else 380.0
-
-    # Keep fixed daily operating expenses independent of the revenue scenario multiplier
-    # while scaling variable inventory replenishment with scenario revenue so scenarios diverge realistically.
-    base_open_rev = max(240.0, min(650.0, base_weekday_rev))
-    daily_open_rev = base_open_rev * scen_mult
-    fixed_daily_opex = base_open_rev * 0.55
-    variable_daily_cogs = daily_open_rev * 0.35
-    daily_open_cost = fixed_daily_opex + variable_daily_cogs
-
-    dow_weights = {0: 0.85, 1: 0.92, 2: 0.98, 3: 1.05, 4: 1.22, 5: 1.32, 6: 0.0}
+    daily_open_rev, daily_open_cost = _compute_baseline_daily_rates(df, scenario=scenario)
 
     start_anchor = pd.Timestamp(TODAY).normalize()
     horizon_n = int(horizon_days)
@@ -317,7 +384,7 @@ def build_owner_forecast(
             rev_after = 0.0
             cost_after = 0.0
         else:
-            w = dow_weights.get(dow, 1.0)
+            w = DOW_WEIGHTS.get(dow, 1.0)
             rev_before = round(daily_open_rev * w, 2)
             cost_before = round(daily_open_cost * w, 2)
             rev_after = rev_before
@@ -327,16 +394,7 @@ def build_owner_forecast(
                 s_dt = pd.to_datetime(ev.get("start_date", TODAY.date())).normalize()
                 e_dt = pd.to_datetime(ev.get("end_date", TODAY.date())).normalize()
                 if s_dt <= d <= e_dt:
-                    tx = str(ev.get("affected_tx", "revenue")).lower()
-                    inv = str(ev.get("affected_inventory", "All Inventories"))
-                    dmg = float(ev.get("damage_pct", 0.0)) / 100.0
-                    inv_factor = 1.0 if inv == "All Inventories" else 0.25
-                    if tx == "revenue":
-                        rev_after = round(max(0.0, rev_after * (1.0 - dmg * inv_factor)), 2)
-                        cost_after = round(max(0.0, cost_after * (1.0 - 0.45 * dmg * inv_factor)), 2)
-                    elif tx in {"inventories", "inventory"}:
-                        cost_after = round(max(0.0, cost_after * (1.0 - dmg * inv_factor)), 2)
-                        rev_after = round(max(0.0, rev_after * (1.0 - 0.35 * dmg * inv_factor)), 2)
+                    rev_after, cost_after, _, _ = _apply_event_to_day(ev, rev_after, cost_after)
 
         cf_adj_after = 0.0
         profit_adj_after = 0.0
