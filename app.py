@@ -463,7 +463,7 @@ else:
     tab_forecast, tab_ledger_audit = st.tabs(["📊 Forecast & Decisions", "Ledger & Audit"])
 
     with tab_forecast:
-        # --- AREA 2: FORECASTED CASHFLOW & PROFIT TRAJECTORY ---
+        # --- AREA 2: FORECASTED CASHFLOW TRAJECTORY ---
         apply_dpo_20 = bool(st.session_state.get("rec_dpo_20", False))
         apply_payroll_15th = bool(st.session_state.get("rec_payroll_15th", False))
         apply_loan_1000 = bool(st.session_state.get("rec_loan_1000", False))
@@ -485,9 +485,9 @@ else:
         has_changes = any([apply_dpo_20, apply_payroll_15th, apply_loan_1000]) or len(current_events) > 0
 
         if has_changes:
-            st.subheader("🌊 2. Forecasted Cashflow & Cumulative Profit Trajectory (Before vs. After Changes)")
+            st.subheader("🌊 2. Forecasted Cashflow Trajectory (Before vs. After Changes)")
         else:
-            st.subheader("🌊 2. Forecasted Cashflow & Cumulative Profit Trajectory")
+            st.subheader("🌊 2. Forecasted Cashflow Trajectory")
 
         ctrl1, ctrl2 = st.columns([1, 2])
         horizon_days = ctrl1.selectbox("⏳ Forecast Window (Days)", options=[30, 60, 90], index=0)
@@ -546,24 +546,9 @@ else:
                 "cum_cash_after": "After Changes",
             })
 
-            profit_combined_df = proj_df.melt(
-                id_vars=["date"],
-                value_vars=["cum_profit_before", "cum_profit_after"],
-                var_name="Series",
-                value_name="Cumulative Profit (€)",
-            )
-            profit_combined_df["Series"] = profit_combined_df["Series"].map({
-                "cum_profit_before": "Before Changes",
-                "cum_profit_after": "After Changes",
-            })
-
             cf_color_scale = alt.Scale(
                 domain=["Before Changes", "After Changes"],
                 range=["#1D4ED8", "#F97316"],
-            )
-            profit_color_scale = alt.Scale(
-                domain=["Before Changes", "After Changes"],
-                range=["#0F172A", "#E11D48"],
             )
 
             st.markdown(f"**💧 Forecasted Cashflow — Before vs. After Changes ({horizon_days} Days — {revenue_scenario})**")
@@ -588,29 +573,6 @@ else:
                 .properties(height=340)
             )
             st.altair_chart(chart_cf, use_container_width=True)
-
-            st.markdown(f"**📊 Cumulative Profit Trajectory — Before vs. After Changes ({horizon_days} Days — {revenue_scenario})**")
-            chart_profit = (
-                alt.Chart(profit_combined_df)
-                .mark_line(strokeWidth=3)
-                .encode(
-                    x=alt.X("date:T", title="Date"),
-                    y=alt.Y("Cumulative Profit (€):Q", title="Cumulative Profit (€)"),
-                    color=alt.Color("Series:N", scale=profit_color_scale, title="Scenario Stage"),
-                    strokeDash=alt.StrokeDash(
-                        "Series:N",
-                        scale=alt.Scale(domain=["Before Changes", "After Changes"], range=[[6, 4], [1, 0]]),
-                        legend=None,
-                    ),
-                    tooltip=[
-                        alt.Tooltip("date:T", title="Date"),
-                        alt.Tooltip("Series:N", title="Stage"),
-                        alt.Tooltip("Cumulative Profit (€):Q", title="Profit (€)", format=",.2f"),
-                    ],
-                )
-                .properties(height=340)
-            )
-            st.altair_chart(chart_profit, use_container_width=True)
         else:
             st.markdown(f"**💧 Forecasted Cashflow ({horizon_days} Days — {revenue_scenario})**")
             chart_cf = (
@@ -628,27 +590,11 @@ else:
             )
             st.altair_chart(chart_cf, use_container_width=True)
 
-            st.markdown(f"**📊 Cumulative Profit Trajectory ({horizon_days} Days — {revenue_scenario})**")
-            chart_profit = (
-                alt.Chart(proj_df)
-                .mark_line(strokeWidth=3, color="#0F172A")
-                .encode(
-                    x=alt.X("date:T", title="Date"),
-                    y=alt.Y("cum_profit_before:Q", title="Cumulative Profit (€)"),
-                    tooltip=[
-                        alt.Tooltip("date:T", title="Date"),
-                        alt.Tooltip("cum_profit_before:Q", title="Cumulative Profit (€)", format=",.2f"),
-                    ],
-                )
-                .properties(height=340)
-            )
-            st.altair_chart(chart_profit, use_container_width=True)
-
         st.divider()
 
         # --- AREA 3: ACTIONABLE RECOMMENDATIONS ---
         st.subheader("🧭 3. Liquidity & Working Capital Recommendations")
-        st.caption("☑️ Toggle actions below to compare Before vs. After cash balance and profit above.")
+        st.caption("☑️ Toggle actions below to compare Before vs. After cash balance above.")
 
         with st.container(border=True):
             st.checkbox(
